@@ -19,6 +19,7 @@ import { z } from "zod";
 import { addressbookInfo, listAddressbookContacts, removeAddressbookContact, resolveAddressbookContact, upsertAddressbookContact, } from "./addressbook.js";
 import { addOutboxEntry, forgetOutboxEntry, getOutboxEntry, listOutboxEntries, outboxInfo, recordOutboxAttempt, updateOutboxStatus, } from "./outbox.js";
 import { addReceipt, getReceipt, listReceipts, receiptInfo, } from "./receipts.js";
+import { diffRunbookContent, getCanonicalRunbook, listCanonicalRunbooks, } from "./runbooks.js";
 import { buildTransfer, configureLowValuePolicy, createWallet, deleteWallet, encryptionKeyFromRpc, exportMnemonic, importWallet, listWallets, moveLowValueAccounting, unitsToDecimal, updateAgentWalletMetadata, walletStoreInfo, } from "./wallet.js";
 const DEFAULT_CHAIN_ID = 69420;
 const DEFAULT_NETWORK = "testnet-69420";
@@ -46,6 +47,7 @@ const DEFAULT_OUTBOX_EXPIRY_HOURS = Number(process.env.LYTH_MCP_OUTBOX_EXPIRY_HO
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_VENDOR_REGISTRY_PATH = resolve(PACKAGE_ROOT, "vendors.example.json");
 const VENDOR_REGISTRY_PATH = process.env.LYTH_MCP_VENDOR_REGISTRY || DEFAULT_VENDOR_REGISTRY_PATH;
+const RUNBOOK_REGISTRY_PATH = process.env.LYTH_MCP_RUNBOOK_REGISTRY || resolve(PACKAGE_ROOT, "runbooks");
 function truncate(value, max = MAX_OUTPUT) {
     const text = typeof value === "string" ? value : safeStringify(value);
     return text.length > max ? `${text.slice(0, max)}\n... (truncated)` : text;
@@ -1046,6 +1048,7 @@ server.tool("mcp_self_check", "Check MCP install, config, stores, and RPC reacha
             outbox: await outboxInfo(),
             receipts: await receiptInfo(),
             vendorRegistry: VENDOR_REGISTRY_PATH,
+            runbookRegistry: RUNBOOK_REGISTRY_PATH,
         },
         guidance: [
             SUBMIT_ENABLED
@@ -2023,6 +2026,60 @@ server.tool("list_runbooks", "List supported AI runbooks and their live-readines
             approval: "all economic actions require wallet/user approval",
             broadcasting: SUBMIT_ENABLED ? "enabled by env" : "disabled; set LYTH_MCP_ENABLE_SUBMIT=1 to enable signed-envelope broadcast",
         },
+    });
+});
+server.tool("runbook_list", "List canonical runbook files with stable content hashes.", {}, async () => {
+    return text({
+        registry: RUNBOOK_REGISTRY_PATH,
+        hashAlgorithm: "sha256",
+        note: "This is a local canonical registry for MCP releases. The future protocol target is signed/hash-verified runbooks from SDK or on-chain metadata.",
+        runbooks: await listCanonicalRunbooks(RUNBOOK_REGISTRY_PATH),
+    });
+});
+server.tool("runbook_get", "Load a canonical runbook by name or id, including content and content hash.", {
+    idOrName: z.string().min(1).describe("Examples: pay_vendor, pay_vendor.v1."),
+}, async ({ idOrName }) => {
+    const runbook = await getCanonicalRunbook(RUNBOOK_REGISTRY_PATH, idOrName);
+    return text({
+        registry: RUNBOOK_REGISTRY_PATH,
+        runbook,
+    });
+});
+server.tool("runbook_verify", "Verify a canonical runbook hash, optionally against an expected hash.", {
+    idOrName: z.string().min(1),
+    expectedHash: z.string().optional().describe("Optional sha256:... content hash to compare."),
+}, async ({ idOrName, expectedHash }) => {
+    const runbook = await getCanonicalRunbook(RUNBOOK_REGISTRY_PATH, idOrName);
+    const matchesExpected = expectedHash ? runbook.contentHash === expectedHash : true;
+    return text({
+        ok: matchesExpected,
+        id: runbook.id,
+        name: runbook.name,
+        version: runbook.version,
+        contentHash: runbook.contentHash,
+        hashAlgorithm: runbook.hashAlgorithm,
+        expectedHash: expectedHash ?? null,
+        registry: RUNBOOK_REGISTRY_PATH,
+        warning: "Hash verification proves local file content stability only. It is not yet a signed upstream registry.",
+    });
+});
+server.tool("runbook_diff_versions", "Diff two canonical runbook versions by name/version id.", {
+    left: z.string().min(1).describe("Left runbook id/name, e.g. pay_vendor.v1."),
+    right: z.string().min(1).describe("Right runbook id/name."),
+}, async ({ left, right }) => {
+    const leftRunbook = await getCanonicalRunbook(RUNBOOK_REGISTRY_PATH, left);
+    const rightRunbook = await getCanonicalRunbook(RUNBOOK_REGISTRY_PATH, right);
+    return text({
+        left: {
+            id: leftRunbook.id,
+            contentHash: leftRunbook.contentHash,
+        },
+        right: {
+            id: rightRunbook.id,
+            contentHash: rightRunbook.contentHash,
+        },
+        sameHash: leftRunbook.contentHash === rightRunbook.contentHash,
+        changes: diffRunbookContent(leftRunbook.content, rightRunbook.content),
     });
 });
 server.tool("draft_runbook", "Draft a typed AI runbook for payment, booking, escrow, trading, policy, receipt, or vendor-rating workflows.", {

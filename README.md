@@ -153,6 +153,7 @@ examples/claude_desktop_config.json
 | `LYTH_MCP_ADDRESSBOOK` | `~/.lyth_mcp/addressbook.json` | Local contact/addressbook store path |
 | `LYTH_MCP_OUTBOX` | `~/.lyth_mcp/outbox.json` | Local signed-payload outbox for retrying without rebuilding/re-signing |
 | `LYTH_MCP_RECEIPTS` | `~/.lyth_mcp/receipts.json` | Local receipt store for drafted/signed/submitted/failed operations |
+| `LYTH_MCP_RUNBOOK_REGISTRY` | bundled `runbooks/` | Local canonical runbook registry path |
 | `LYTH_MCP_WALLET_PASSPHRASE` | unset | Optional env passphrase for unattended passphrase signing; safer to pass per call |
 | `LYTH_MCP_DEFAULT_LOW_VALUE_MAX` | `10` | Default LYTH per-transaction cap for passphrase-less wallets |
 | `LYTH_MCP_DEFAULT_LOW_VALUE_DAILY_LIMIT` | `50` | Default LYTH daily cap for passphrase-less wallets |
@@ -188,6 +189,10 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | Tool | Purpose |
 |---|---|
 | `list_runbooks` | Show supported runbooks and live-readiness status |
+| `runbook_list` | List canonical runbook files with stable content hashes |
+| `runbook_get` | Load one canonical runbook by name or id |
+| `runbook_verify` | Verify a runbook content hash |
+| `runbook_diff_versions` | Diff two runbook versions |
 | `draft_runbook` | Create a typed runbook intent |
 | `validate_runbook` | Check a runbook against spending policy and safety rules |
 | `prepare_wallet_request` | Prepare a wallet approval payload where supported |
@@ -247,6 +252,8 @@ Runbook JSON examples live in:
 ```text
 runbooks/
 ```
+
+The MCP exposes those files through a local canonical registry. `runbook_list` returns stable `sha256:` content hashes, and `runbook_verify` can compare a runbook against an expected hash. This is a release-local integrity layer; the future target is signed SDK/protocol registry metadata.
 
 ## Wallet Setup
 

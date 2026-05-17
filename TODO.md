@@ -47,6 +47,7 @@ Legend:
 - [x] MCP self-check and Markdown dashboard for text/TUI-style clients.
 - [x] Transfer preflight, RPC health scoring, tx watcher, and bucketed low-value accounting.
 - [x] Low-value reservation expiry/manual release and approval summary rendering.
+- [x] Local canonical runbook registry tools with stable content hashes.
 - [x] Local addressbook with named-recipient transfer resolution.
 - [x] Demo vendor registry with pizza, flight, plumber, gift-card, and legal-review examples.
 - [x] Draft runbooks for payment, service booking, escrow, trade, policy, receipt, and vendor-rating flows.
@@ -166,11 +167,13 @@ Whitepaper refs: §10, §21.2.1, §24.10, §27.6, §28.5, §30.1.
 Whitepaper refs: §10, §24, §27.3-§27.7.
 
 - [ ] **SDK** Define canonical runbook JSON schema with JCS/RFC 8785 canonicalization and BLAKE3 content hash.
+- [x] **MCP** Add local canonical runbook registry tools.
+  - Current MCP implementation uses stable canonical JSON and `sha256:` content hashes for bundled runbook files.
+  - Tools: `runbook_list`, `runbook_get`, `runbook_verify`, `runbook_diff_versions`.
+  - Future SDK/protocol version should upgrade this to signed registry metadata and the final hash algorithm.
 - [ ] **MCP** Replace current ad hoc runbook drafts with canonical runbook loading/validation.
   - Runbooks live in SDK releases or bundled verified registry.
   - MCP verifies content hash before use.
-- [ ] **MCP** Add runbook registry tools.
-  - `runbook_list`, `runbook_get`, `runbook_verify`, `runbook_diff_versions`.
 - [ ] **MCP** Add runbook execution state machine.
   - `selected -> filled -> preflighted -> approved -> signed -> submitted -> monitored -> completed | disputed | expired`.
 - [ ] **MCP** Add preconditions and post-conditions engine.
