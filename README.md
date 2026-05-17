@@ -77,7 +77,7 @@ npm install
 npm run build
 ```
 
-Current workspace builds use `@monolythium/core-sdk` from `../mono-core-sdk/packages/ts`. Before publishing `lyth_mcp` as a fully standalone public repo, publish that SDK package or extract the wallet crypto helpers into a separate public package.
+`@monolythium/core-sdk` is installed from the public GitHub repo `monolythium-vision/mono-core-sdk`, so this MCP can be installed outside the local monorepo.
 
 Run the server over stdio:
 

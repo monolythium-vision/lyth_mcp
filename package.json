@@ -23,8 +23,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@monolythium/core-sdk": "file:../mono-core-sdk/packages/ts",
     "@modelcontextprotocol/sdk": "^1.12.0",
+    "@monolythium/core-sdk": "git+https://github.com/monolythium-vision/mono-core-sdk.git#master",
     "zod": "^3.25.0"
   },
   "devDependencies": {
