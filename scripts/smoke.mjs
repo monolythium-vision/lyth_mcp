@@ -176,6 +176,35 @@ const delegationCap = delegation.explainDelegationCaps({
   selectedClusterCount: 5,
   overCapEpochs: 3,
 });
+const stakeStatus = delegation.stakeStatus(clusterRegistry.registry, {
+  phase: "growth",
+  positions: [
+    { clusterId: "mono-eu-1", amount: "180" },
+    { clusterId: "mono-nl-community-1", amount: "300" },
+    { clusterId: "mono-us-west-1", amount: "120" },
+  ],
+});
+const delegateDraft = delegation.delegateDraft(clusterRegistry.registry, {
+  clusterId: "mono-nl-community-1",
+  amount: "50",
+  mode: "max_decentralization",
+  positions: stakeStatus.positions.map((entry) => entry.position),
+});
+const rebalanceDraft = delegation.rebalanceDraft(clusterRegistry.registry, {
+  mode: "max_decentralization",
+  positions: stakeStatus.positions.map((entry) => entry.position),
+  targetClusterCount: 3,
+});
+const undelegateDraft = delegation.undelegateDraft(clusterRegistry.registry, {
+  clusterId: "mono-eu-1",
+  amount: "40",
+  positions: stakeStatus.positions.map((entry) => entry.position),
+});
+const autovote = delegation.autovoteSimulate(clusterRegistry.registry, {
+  mode: "max_decentralization",
+  positions: stakeStatus.positions.map((entry) => entry.position),
+  candidateLimit: 3,
+});
 const nodeRegistry = await nodes.loadNodeRegistry("./nodes.example.json");
 const proverNode = nodes.getNode(nodeRegistry.registry, "nl1-prover-01");
 const rpcNode = nodes.getNode(nodeRegistry.registry, "nl1-rpc-01");
@@ -192,6 +221,11 @@ assert(monarch.clusters.some((entry) => entry.quorum.configured === "7-of-10"), 
 assert(monarch.guardrails.some((entry) => entry.includes("node/operator")), "expected monarch assistant node-ops guardrail");
 assert(delegationCap.taper.overCap === true && delegationCap.taper.rewardTaperPercent > 0, "expected delegation cap taper for over-cap cluster");
 assert(delegationCap.diversification.ok === false, "expected delegation diversification warning");
+assert(stakeStatus.totalDelegatedStake === "600", "expected local stake status total");
+assert(delegateDraft.operation === "delegate" && delegateDraft.unsigned === true, "expected unsigned delegate draft");
+assert(rebalanceDraft.operations.length === 3, "expected rebalance target operations");
+assert(undelegateDraft.operation === "undelegate", "expected undelegate draft");
+assert(autovote.rankedCandidates.length === 3, "expected autovote candidate ranking");
 assert(attestation.ok === true && attestation.status === "verified", "expected prover node attestation to verify against local profile");
 assert(rpcAttestation.ok === false && rpcAttestation.mismatches.some((item) => item.pcr === "7"), "expected RPC node PCR mismatch");
 assert(pcr.entries[0].meaning.includes("Secure Boot"), "expected PCR 7 explanation");
@@ -217,6 +251,7 @@ console.log(JSON.stringify({
   euProvers: euProvers.length,
   monarchClusters: monarch.clusters.length,
   delegationTaper: delegationCap.taper.rewardTaperPercent,
+  autovoteCandidates: autovote.rankedCandidates.length,
   nodes: nodeRegistry.registry.nodes.length,
   nodeDiversity: diversity.score,
   runbooks: runbookList.length,

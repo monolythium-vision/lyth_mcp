@@ -27,7 +27,7 @@ import { bookingStoreInfo, createBooking, getBooking, listBookings, updateBookin
 import { createInvoice, getInvoice, invoiceStoreInfo, listInvoices, updateInvoice, } from "./invoices.js";
 import { explainError } from "./error_explain.js";
 import { clusterFoundationFlag, clusterRegistrySummary, clusterReputation, clusterSunsetStatus, getCluster, getOperator, listClusters, listOperators, loadClusterRegistry, monarchOperatorAssistant, operatorStatus, searchServices, } from "./clusters.js";
-import { delegationPhaseConfig, explainDelegationCaps, } from "./delegation.js";
+import { autovoteSimulate, delegateDraft, delegationPhaseConfig, explainDelegationCaps, rebalanceDraft, stakeStatus, undelegateDraft, } from "./delegation.js";
 import { explainPcr, getNode, listNodes, loadNodeRegistry, nodeAttestation, nodeDiversityScore, nodeHostingClass, nodeRegistrySummary, } from "./nodes.js";
 import { evaluateMerchantPolicy, getMerchantPolicy, listMerchantPolicies, merchantPolicyStoreInfo, removeMerchantPolicy, upsertMerchantPolicy, } from "./merchant_policy.js";
 import { diffRunbookContent, getCanonicalRunbook, listCanonicalRunbooks, } from "./runbooks.js";
@@ -1194,6 +1194,7 @@ const bridgeRouteTypeEnum = z.enum(["ibc", "zk_light_client", "trusted", "issuer
 const clusterStatusEnum = z.enum(["active", "draft", "degraded", "sunsetting", "retired"]);
 const clusterServiceTypeEnum = z.enum(["rpc", "archive", "prover", "oracle", "indexer", "validator"]);
 const delegationPhaseEnum = z.enum(["bootstrap", "growth", "mature"]);
+const delegationModeEnum = z.enum(["max_yield", "max_diversity", "max_decentralization", "custom"]);
 const nodeRoleEnum = z.enum(["validator", "rpc", "archive", "prover", "oracle", "indexer"]);
 const nodeStatusEnum = z.enum(["active", "draft", "degraded", "paused", "retired"]);
 const nodeHostingClassEnum = z.enum(["community_baremetal", "cloud_dedicated", "cloud_shared", "cloud_gpu", "planned_mixed"]);
@@ -1218,6 +1219,10 @@ const assetUseCaseEnum = z.enum([
     "view",
 ]);
 const recordSchema = z.record(z.unknown()).optional();
+const delegationPositionsSchema = z.array(z.object({
+    clusterId: z.string().min(1),
+    amount: z.string().min(1),
+})).optional();
 const policySchema = z.object({
     maxAmount: z.string().optional(),
     assetAllowlist: z.array(z.string()).optional(),
@@ -2410,6 +2415,43 @@ server.tool("ask_chain", "Route a natural-language blockchain question to a type
                     phase: /bootstrap/i.test(question) ? "bootstrap" : /mature/i.test(question) ? "mature" : "growth",
                     totalDelegatedStake: extractDecimal(question),
                 }),
+            });
+        }
+        if (/autovote|rebalance|undelegate|delegate|stake status/i.test(question)) {
+            const mode = /yield/i.test(question)
+                ? "max_yield"
+                : /diversity/i.test(question)
+                    ? "max_diversity"
+                    : /decentralization|decentralisation/i.test(question)
+                        ? "max_decentralization"
+                        : "custom";
+            const clusterId = registry.registry.clusters.find((cluster) => lower.includes(cluster.id.toLowerCase()))?.id
+                ?? listClusters(registry.registry, { status: "active", foundationControlled: mode === "max_decentralization" ? false : undefined, limit: 1 })[0]?.id;
+            const amount = extractDecimal(question) ?? "0";
+            const typedTool = /autovote/i.test(question)
+                ? "autovote_simulate"
+                : /rebalance/i.test(question)
+                    ? "rebalance_draft"
+                    : /undelegate/i.test(question)
+                        ? "undelegate_draft"
+                        : /delegate/i.test(question)
+                            ? "delegate_draft"
+                            : "stake_status";
+            const result = typedTool === "autovote_simulate"
+                ? autovoteSimulate(registry.registry, { mode })
+                : typedTool === "rebalance_draft"
+                    ? rebalanceDraft(registry.registry, { mode })
+                    : typedTool === "undelegate_draft" && clusterId
+                        ? undelegateDraft(registry.registry, { clusterId, amount })
+                        : typedTool === "delegate_draft" && clusterId
+                            ? delegateDraft(registry.registry, { clusterId, amount, mode })
+                            : stakeStatus(registry.registry);
+            return asText({
+                question,
+                intent: typedTool,
+                typedTool,
+                sources: [{ type: "local_registry", path: CLUSTER_REGISTRY_PATH, hash: registry.contentHash }],
+                result,
             });
         }
         const region = /\beu\b|europe/i.test(question)
@@ -3643,6 +3685,89 @@ server.tool("delegation_cap_explain", "Explain current delegation phase, per-clu
         phase: args.phase,
     }),
 }));
+server.tool("stake_status", "Summarize local staking positions against delegation phase caps and cluster risk metadata. Planning only.", {
+    phase: delegationPhaseEnum.optional(),
+    positions: delegationPositionsSchema,
+}, async ({ phase, positions }) => {
+    const registry = await loadClusters();
+    return text({
+        registry: clusterRegistrySummary(registry),
+        status: stakeStatus(registry.registry, {
+            phase: phase,
+            positions: positions,
+        }),
+    });
+});
+server.tool("delegate_draft", "Draft a local delegation plan for one cluster. Does not build or submit a staking transaction.", {
+    clusterId: z.string().min(1),
+    amount: z.string().min(1),
+    mode: delegationModeEnum.optional(),
+    phase: delegationPhaseEnum.optional(),
+    positions: delegationPositionsSchema,
+}, async ({ clusterId, amount, mode, phase, positions }) => {
+    const registry = await loadClusters();
+    return text({
+        registry: clusterRegistrySummary(registry),
+        draft: delegateDraft(registry.registry, {
+            clusterId,
+            amount,
+            mode: mode,
+            phase: phase,
+            positions: positions,
+        }),
+    });
+});
+server.tool("rebalance_draft", "Draft a local rebalance plan across clusters for yield, diversity, or decentralization mode. Planning only.", {
+    mode: delegationModeEnum.optional(),
+    phase: delegationPhaseEnum.optional(),
+    positions: delegationPositionsSchema,
+    targetClusterCount: z.number().int().min(1).max(50).optional(),
+}, async ({ mode, phase, positions, targetClusterCount }) => {
+    const registry = await loadClusters();
+    return text({
+        registry: clusterRegistrySummary(registry),
+        draft: rebalanceDraft(registry.registry, {
+            mode: mode,
+            phase: phase,
+            positions: positions,
+            targetClusterCount,
+        }),
+    });
+});
+server.tool("undelegate_draft", "Draft a local undelegation plan for one cluster. Does not build or submit a staking transaction.", {
+    clusterId: z.string().min(1),
+    amount: z.string().min(1),
+    positions: delegationPositionsSchema,
+    reason: z.string().optional(),
+}, async ({ clusterId, amount, positions, reason }) => {
+    const registry = await loadClusters();
+    return text({
+        registry: clusterRegistrySummary(registry),
+        draft: undelegateDraft(registry.registry, {
+            clusterId,
+            amount,
+            positions: positions,
+            reason,
+        }),
+    });
+});
+server.tool("autovote_simulate", "Simulate cluster ranking for staking autovote modes without voting, delegating, or signing.", {
+    mode: delegationModeEnum.optional(),
+    phase: delegationPhaseEnum.optional(),
+    positions: delegationPositionsSchema,
+    candidateLimit: z.number().int().min(1).max(50).optional(),
+}, async ({ mode, phase, positions, candidateLimit }) => {
+    const registry = await loadClusters();
+    return text({
+        registry: clusterRegistrySummary(registry),
+        simulation: autovoteSimulate(registry.registry, {
+            mode: mode,
+            phase: phase,
+            positions: positions,
+            candidateLimit,
+        }),
+    });
+});
 server.tool("node_registry_info", "Show local node registry metadata, hashes, roles, statuses, hosting classes, and attestation states.", {}, async () => {
     const registry = await loadNodes();
     return text(nodeRegistrySummary(registry));

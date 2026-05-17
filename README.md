@@ -237,6 +237,11 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `operator_open_seats` | List clusters/operators with open operator seats |
 | `monarch_operator_assistant` | Explain cluster health, quorum, resource pressure, open seats, and service ROI |
 | `delegation_cap_explain` | Explain phase caps, diversification, over-cap grace, and tapered rewards |
+| `stake_status` | Summarize local staking positions against caps and cluster risk |
+| `delegate_draft` | Draft a local delegation plan for one cluster |
+| `rebalance_draft` | Draft a local rebalance plan across clusters |
+| `undelegate_draft` | Draft a local undelegation plan for one cluster |
+| `autovote_simulate` | Simulate cluster ranking for staking autovote modes |
 | `node_registry_info` | Show local node registry metadata and hashes |
 | `node_search` | Search nodes by cluster, operator, role, status, hosting, attestation, GPU, and TPM |
 | `node_attestation_get` | Get local TPM/attestation metadata and PCR comparison for one node |
@@ -415,7 +420,9 @@ The local registry lets an assistant answer:
 - which clusters are better candidates for max-decentralization delegation;
 - which operators have draft reputation, cluster membership, and attestation status.
 
-Use `cluster_search`, `cluster_reputation`, `cluster_foundation_flag`, and `cluster_sunset_status` for delegation explanations. Use `delegation_cap_explain` for phase-level staking policy: per-cluster cap, minimum diversification, over-cap grace period, and tapered reward assumptions. It is a local explainer only; it does not draft a stake transaction.
+Use `cluster_search`, `cluster_reputation`, `cluster_foundation_flag`, and `cluster_sunset_status` for delegation explanations. Use `delegation_cap_explain` for phase-level staking policy: per-cluster cap, minimum diversification, over-cap grace period, and tapered reward assumptions.
+
+`stake_status`, `delegate_draft`, `rebalance_draft`, `undelegate_draft`, and `autovote_simulate` are local planning shims for future staking UX. They rank clusters and produce unsigned plans, but they do not build or submit staking transactions.
 
 Use `monarch_operator_assistant` for node-operator planning: cluster health, 7-of-10 quorum, update status, open seats, resource pressure, and service ROI. It is intentionally node-ops only and should not be mixed into consumer wallet/payment flows.
 
