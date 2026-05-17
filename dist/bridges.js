@@ -141,6 +141,41 @@ export function bridgeStatusSummary(registry) {
         };
     });
 }
+export function bridgeCircuitBreakerAlerts(registry, args = {}) {
+    const routes = listBridgeRoutes(registry, { asset: args.asset });
+    const drainCapWarnPercent = args.drainCapWarnPercent ?? 20;
+    const alerts = [];
+    for (const route of routes) {
+        if (route.circuitBreaker?.paused) {
+            alerts.push(alert(route, "critical", "BridgeRoutePaused", `Route ${route.id} is paused${route.circuitBreaker.reason ? `: ${route.circuitBreaker.reason}` : "."}`));
+        }
+        if (route.status !== "active") {
+            alerts.push(alert(route, route.status === "paused" ? "critical" : "warning", "BridgeRouteNotActive", `Route ${route.id} status is ${route.status}; do not treat it as executable.`));
+        }
+        if (route.routeType === "trusted") {
+            alerts.push(alert(route, "warning", "TrustedBridgeRoute", `Route ${route.id} is trusted/transitional and should keep a longer cooldown until zk/light-client replacement.`));
+        }
+        if (!route.audits?.length) {
+            alerts.push(alert(route, "warning", "MissingBridgeAuditMetadata", `Route ${route.id} has no audit metadata configured.`));
+        }
+        if (!route.insurance || route.insurance.toLowerCase() === "tbd") {
+            alerts.push(alert(route, "info", "MissingBridgeInsuranceMetadata", `Route ${route.id} has no finalized insurance/backstop metadata.`));
+        }
+        const remaining = route.drainCap?.remaining;
+        const perEpoch = route.drainCap?.perEpoch;
+        if (remaining && perEpoch) {
+            const remainingUnits = decimalToUnits(remaining);
+            const capUnits = decimalToUnits(perEpoch);
+            if (capUnits > 0n) {
+                const percent = Number(remainingUnits * 10000n / capUnits) / 100;
+                if (percent <= drainCapWarnPercent) {
+                    alerts.push(alert(route, percent <= 5 ? "critical" : "warning", "BridgeDrainCapLow", `Route ${route.id} drain-cap remaining is ${percent}% (${remaining}/${perEpoch} ${route.drainCap?.asset ?? route.sourceAsset}).`));
+                }
+            }
+        }
+    }
+    return alerts.sort((a, b) => severityRank(b.severity) - severityRank(a.severity) || a.routeId.localeCompare(b.routeId));
+}
 function routeCooldown(route, epochHours) {
     const hours = route.cooldown?.hours ?? (route.cooldown?.epochs ? route.cooldown.epochs * epochHours : epochHours);
     return {
@@ -148,6 +183,25 @@ function routeCooldown(route, epochHours) {
         hours,
         label: route.cooldown?.label ?? (route.cooldown?.epochs ? `${route.cooldown.epochs} epoch${route.cooldown.epochs === 1 ? "" : "s"} (~${hours}h)` : `~${hours}h`),
     };
+}
+function alert(route, severity, code, message) {
+    return {
+        routeId: route.id,
+        severity,
+        code,
+        message,
+        routeStatus: route.status,
+        routeType: route.routeType,
+    };
+}
+function severityRank(severity) {
+    if (severity === "critical") {
+        return 3;
+    }
+    if (severity === "warning") {
+        return 2;
+    }
+    return 1;
 }
 function riskForRoute(route, violations, warnings) {
     const reasons = [];

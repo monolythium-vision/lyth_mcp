@@ -300,7 +300,7 @@ Whitepaper refs: §17, §18, §21.6, §22.10, §26, §29.1, §30.7.
   - Solana: 1-2 epochs depending on finality confidence.
   - Bitcoin: 2 epochs or value-tiered limits.
   - Trusted/transitional routes: longer cooldown until zk/light-client path replaces them.
-- [ ] **MCP** Bridge circuit-breaker watcher.
+- [x] **MCP** Bridge circuit-breaker watcher.
   - Alert if route halted, drain cap near exhaustion, light client stale, proof verifier sunset active.
 - [x] **MCP** USDC/native issuer support tracker.
   - Current support status, issuer route, wrapped route, route risk, liquidity venue.

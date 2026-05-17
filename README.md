@@ -218,6 +218,7 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `bridge_quote` | Preflight a bridge amount against route status, fees, caps, cooldown, and risk |
 | `bridge_cooldown_matrix` | Show configured cooldowns by route |
 | `bridge_status_summary` | Summarize route health, drain caps, and attention flags |
+| `bridge_circuit_breaker_watch` | Alert on paused/non-active routes, trusted-route risk, missing audits, and low drain caps |
 | `liquidity_onboarding` | Explain how to bring an asset into Mono through configured routes |
 | `vendor_registry_info` | Show registry hashes, issuer, expiry, signature status, and categories |
 | `vendor_get` | Get one vendor by id |
@@ -348,6 +349,8 @@ The registry lets an assistant answer:
 - route fees, limits, drain caps, circuit-breaker status, finality threshold, and trust assumptions.
 
 Use `bridge_quote` to check a specific amount before a future bridge transaction builder exists. Draft routes intentionally return `executable: false` so the assistant can explain the path without pretending a live bridge transfer can be sent.
+
+Use `bridge_circuit_breaker_watch` to surface route pauses, non-active routes, trusted/transitional risk, missing audit/insurance metadata, and low drain-cap remaining. In this example registry it intentionally returns critical alerts because all routes are draft or paused.
 
 The bundled cooldown posture is:
 

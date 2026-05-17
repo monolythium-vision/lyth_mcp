@@ -54,6 +54,7 @@ import {
   type ConnectorRecord,
 } from "./connectors.js";
 import {
+  bridgeCircuitBreakerAlerts,
   bridgeCooldownMatrix,
   bridgeRegistrySummary,
   bridgeStatusSummary,
@@ -3572,6 +3573,31 @@ server.tool("bridge_status_summary", "Summarize configured bridge route health, 
     routes: bridgeStatusSummary(registry.registry),
   });
 });
+
+server.tool(
+  "bridge_circuit_breaker_watch",
+  "Watch configured bridge routes for paused routes, non-active status, trusted-route risk, missing audit metadata, and low drain caps.",
+  {
+    asset: z.string().optional(),
+    drainCapWarnPercent: z.number().min(1).max(100).optional().describe("Warn when drain-cap remaining is at or below this percentage. Default 20."),
+  },
+  async ({ asset, drainCapWarnPercent }) => {
+    const registry = await loadBridgeRoutes();
+    const alerts = bridgeCircuitBreakerAlerts(registry.registry, { asset, drainCapWarnPercent });
+    return alerts.some((item) => item.severity === "critical")
+      ? errorJson({
+          ok: false,
+          registry: bridgeRegistrySummary(registry),
+          alerts,
+          warning: "Critical bridge alerts should freeze new route usage until an operator reviews the route.",
+        })
+      : text({
+          ok: true,
+          registry: bridgeRegistrySummary(registry),
+          alerts,
+        });
+  },
+);
 
 server.tool(
   "liquidity_onboarding",

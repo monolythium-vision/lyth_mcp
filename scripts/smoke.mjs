@@ -114,8 +114,10 @@ const bridgeQuote = bridges.quoteBridgeRoute(bridgeRoute, {
   asset: "USDC",
   epochHours: bridgeRegistry.registry.epochHours,
 });
+const bridgeAlerts = bridges.bridgeCircuitBreakerAlerts(bridgeRegistry.registry);
 assert(bridgeQuote.executable === false, "expected draft bridge route to be non-executable");
 assert(bridgeQuote.cooldown.hours === 14, "expected one-epoch bridge cooldown");
+assert(bridgeAlerts.some((alert) => alert.code === "BridgeRouteNotActive"), "expected bridge route non-active alert");
 
 const assetRegistry = await assets.loadAssetRegistry("./asset_registry.example.json");
 const publicLyth = assets.getAsset(assetRegistry.registry, "LYTH");
@@ -139,6 +141,7 @@ console.log(JSON.stringify({
   booking: booking.id,
   invoice: invoice.id,
   bridgeRoute: bridgeRoute.id,
+  bridgeAlerts: bridgeAlerts.length,
   assets: assetRegistry.registry.assets.length,
   runbooks: runbookList.length,
 }, null, 2));

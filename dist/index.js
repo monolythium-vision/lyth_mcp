@@ -19,7 +19,7 @@ import { addressbookInfo, listAddressbookContacts, removeAddressbookContact, res
 import { addOutboxEntry, forgetOutboxEntry, getOutboxEntry, listOutboxEntries, outboxInfo, recordOutboxAttempt, updateOutboxStatus, } from "./outbox.js";
 import { addReceipt, getReceipt, listReceipts, receiptInfo, } from "./receipts.js";
 import { buildConnectorHeaders, connectorPayloadHash, connectorStoreInfo, getConnector, listConnectors, redactConnector, removeConnector, resolveConnector, upsertConnector, } from "./connectors.js";
-import { bridgeCooldownMatrix, bridgeRegistrySummary, bridgeStatusSummary, getBridgeRoute, listBridgeRoutes, loadBridgeRegistry, quoteBridgeRoute, selectBridgeRoute, } from "./bridges.js";
+import { bridgeCircuitBreakerAlerts, bridgeCooldownMatrix, bridgeRegistrySummary, bridgeStatusSummary, getBridgeRoute, listBridgeRoutes, loadBridgeRegistry, quoteBridgeRoute, selectBridgeRoute, } from "./bridges.js";
 import { assetRegistrySummary, assetRisk, evaluateAssetUseCase, getAsset, listAssets, loadAssetRegistry, privateDenominationWarning, } from "./assets.js";
 import { createOrder, getOrder, listOrders, orderStoreInfo, updateOrder, } from "./orders.js";
 import { bookingStoreInfo, createBooking, getBooking, listBookings, updateBooking, } from "./bookings.js";
@@ -2881,6 +2881,25 @@ server.tool("bridge_status_summary", "Summarize configured bridge route health, 
         registry: bridgeRegistrySummary(registry),
         routes: bridgeStatusSummary(registry.registry),
     });
+});
+server.tool("bridge_circuit_breaker_watch", "Watch configured bridge routes for paused routes, non-active status, trusted-route risk, missing audit metadata, and low drain caps.", {
+    asset: z.string().optional(),
+    drainCapWarnPercent: z.number().min(1).max(100).optional().describe("Warn when drain-cap remaining is at or below this percentage. Default 20."),
+}, async ({ asset, drainCapWarnPercent }) => {
+    const registry = await loadBridgeRoutes();
+    const alerts = bridgeCircuitBreakerAlerts(registry.registry, { asset, drainCapWarnPercent });
+    return alerts.some((item) => item.severity === "critical")
+        ? errorJson({
+            ok: false,
+            registry: bridgeRegistrySummary(registry),
+            alerts,
+            warning: "Critical bridge alerts should freeze new route usage until an operator reviews the route.",
+        })
+        : text({
+            ok: true,
+            registry: bridgeRegistrySummary(registry),
+            alerts,
+        });
 });
 server.tool("liquidity_onboarding", "Explain how to bring an asset into Mono using configured bridge/liquidity routes.", {
     asset: z.string(),

@@ -84,6 +84,14 @@ export interface BridgeRisk {
     reasons: string[];
     trustModel: BridgeRouteType;
 }
+export interface BridgeCircuitAlert {
+    routeId: string;
+    severity: "info" | "warning" | "critical";
+    code: string;
+    message: string;
+    routeStatus: BridgeRouteStatus;
+    routeType: BridgeRouteType;
+}
 export declare function loadBridgeRegistry(path: string): Promise<LoadedBridgeRegistry>;
 export declare function bridgeRegistrySummary(loaded: LoadedBridgeRegistry): {
     source: string;
@@ -159,3 +167,7 @@ export declare function bridgeStatusSummary(registry: BridgeRegistry): {
     risk: BridgeRisk;
     attention: boolean;
 }[];
+export declare function bridgeCircuitBreakerAlerts(registry: BridgeRegistry, args?: {
+    asset?: string;
+    drainCapWarnPercent?: number;
+}): BridgeCircuitAlert[];
