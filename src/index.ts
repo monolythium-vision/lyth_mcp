@@ -14,6 +14,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
   buildTransfer,
@@ -48,7 +50,9 @@ const CHAIN_ID = Number(process.env.LYTH_CHAIN_ID ?? DEFAULT_CHAIN_ID);
 const REQUEST_TIMEOUT_MS = Number(process.env.LYTH_MCP_TIMEOUT_MS ?? 10_000);
 const MAX_OUTPUT = Number(process.env.LYTH_MCP_MAX_OUTPUT ?? 16_000);
 const SUBMIT_ENABLED = process.env.LYTH_MCP_ENABLE_SUBMIT === "1";
-const VENDOR_REGISTRY_PATH = process.env.LYTH_MCP_VENDOR_REGISTRY;
+const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const DEFAULT_VENDOR_REGISTRY_PATH = resolve(PACKAGE_ROOT, "vendors.example.json");
+const VENDOR_REGISTRY_PATH = process.env.LYTH_MCP_VENDOR_REGISTRY || DEFAULT_VENDOR_REGISTRY_PATH;
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
@@ -683,13 +687,6 @@ function prepareWalletRequest(draft: RunbookDraft, from?: string) {
 }
 
 async function loadVendors() {
-  if (!VENDOR_REGISTRY_PATH) {
-    return {
-      source: "none",
-      vendors: [],
-      note: "Set LYTH_MCP_VENDOR_REGISTRY=/path/to/vendors.json to enable local vendor discovery.",
-    };
-  }
   const raw = await readFile(VENDOR_REGISTRY_PATH, "utf8");
   const parsed = JSON.parse(raw);
   const vendors = Array.isArray(parsed) ? parsed : parsed.vendors;

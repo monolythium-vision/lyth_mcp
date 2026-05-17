@@ -130,7 +130,7 @@ examples/claude_desktop_config.json
 | `LYTH_RPC_URLS` | official testnet RPCs | Comma-separated RPC endpoint override |
 | `LYTH_MCP_TIMEOUT_MS` | `10000` | Per-request timeout |
 | `LYTH_MCP_MAX_OUTPUT` | `16000` | MCP response truncation limit |
-| `LYTH_MCP_VENDOR_REGISTRY` | unset | Path to local vendor registry JSON |
+| `LYTH_MCP_VENDOR_REGISTRY` | bundled `vendors.example.json` | Optional path override for local vendor registry JSON |
 | `LYTH_MCP_ENABLE_SUBMIT` | `0` | Set to `1` to allow broadcasting already-signed payloads |
 | `LYTH_MCP_WALLET_STORE` | `~/.lyth_mcp/wallets.json` | Local encrypted wallet store path |
 | `LYTH_MCP_HOT_KEY` | `~/.lyth_mcp/hot.key` | Local key file used only for opt-in low-value mode |
@@ -343,7 +343,7 @@ This runbook produces a funding request. Use `wallet_setup` separately when the 
 
 ## Vendor Registry
 
-Set `LYTH_MCP_VENDOR_REGISTRY` to a JSON file:
+By default, the MCP loads the bundled `vendors.example.json` demo registry. Set `LYTH_MCP_VENDOR_REGISTRY` only when you want to override it with another JSON file:
 
 ```bash
 LYTH_MCP_VENDOR_REGISTRY=./vendors.example.json npm start
