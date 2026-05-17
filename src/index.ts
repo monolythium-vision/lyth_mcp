@@ -106,6 +106,21 @@ import {
 } from "./invoices.js";
 import { explainError } from "./error_explain.js";
 import {
+  clusterFoundationFlag,
+  clusterRegistrySummary,
+  clusterReputation,
+  clusterSunsetStatus,
+  getCluster,
+  getOperator,
+  listClusters,
+  listOperators,
+  loadClusterRegistry,
+  operatorStatus,
+  searchServices,
+  type ClusterServiceType,
+  type ClusterStatus,
+} from "./clusters.js";
+import {
   evaluateMerchantPolicy,
   getMerchantPolicy,
   listMerchantPolicies,
@@ -175,6 +190,8 @@ const DEFAULT_ASSET_REGISTRY_PATH = resolve(PACKAGE_ROOT, "asset_registry.exampl
 const ASSET_REGISTRY_PATH = process.env.LYTH_MCP_ASSET_REGISTRY || DEFAULT_ASSET_REGISTRY_PATH;
 const DEFAULT_BRIDGE_ROUTE_REGISTRY_PATH = resolve(PACKAGE_ROOT, "bridge_routes.example.json");
 const BRIDGE_ROUTE_REGISTRY_PATH = process.env.LYTH_MCP_BRIDGE_ROUTE_REGISTRY || DEFAULT_BRIDGE_ROUTE_REGISTRY_PATH;
+const DEFAULT_CLUSTER_REGISTRY_PATH = resolve(PACKAGE_ROOT, "clusters.example.json");
+const CLUSTER_REGISTRY_PATH = process.env.LYTH_MCP_CLUSTER_REGISTRY || DEFAULT_CLUSTER_REGISTRY_PATH;
 const RUNBOOK_REGISTRY_PATH = process.env.LYTH_MCP_RUNBOOK_REGISTRY || resolve(PACKAGE_ROOT, "runbooks");
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -1082,6 +1099,11 @@ async function loadBridgeRoutes() {
   return loadBridgeRegistry(BRIDGE_ROUTE_REGISTRY_PATH);
 }
 
+async function loadClusters() {
+  // TODO(mainnet): replace bundled planning data with signed/indexer cluster registry reads once core exposes them.
+  return loadClusterRegistry(CLUSTER_REGISTRY_PATH);
+}
+
 async function quoteOrder(args: {
   vendorId: string;
   itemId?: string;
@@ -1509,6 +1531,8 @@ const bookingStatusEnum = z.enum(["requested", "provider_requested", "accepted_d
 const invoiceStatusEnum = z.enum(["open", "paid", "cancelled", "expired"]);
 const bridgeStatusEnum = z.enum(["active", "draft", "degraded", "paused"]);
 const bridgeRouteTypeEnum = z.enum(["ibc", "zk_light_client", "trusted", "issuer_native", "manual"]);
+const clusterStatusEnum = z.enum(["active", "draft", "degraded", "sunsetting", "retired"]);
+const clusterServiceTypeEnum = z.enum(["rpc", "archive", "prover", "oracle", "indexer", "validator"]);
 const assetKindEnum = z.enum(["native", "private_native", "wrapped", "issuer_native", "mrc20", "nft", "vault"]);
 const assetStatusEnum = z.enum(["active", "draft", "deprecated", "blocked"]);
 const assetDenominationEnum = z.enum(["public", "private", "external"]);
@@ -2772,7 +2796,7 @@ server.tool(
         result: explainError({ errorMessage: question, tool: "ask_chain" }),
       });
     }
-    if (/(status|health|sync|mempool|rpc)/i.test(question)) {
+    if (/(status|health|sync|mempool|rpc health|rpc status)/i.test(question) && !/(cluster|operator|validator|prover|gpu|foundation|decentralization|decentralisation|stake|staking)/i.test(question)) {
       const endpoint = await firstReachableEndpoint();
       const [stats, round, mempool, indexer, sync] = await Promise.allSettled([
         rpcCall(endpoint, "lyth_chainStats"),
@@ -2794,6 +2818,84 @@ server.tool(
           mempool: mempool.status === "fulfilled" ? mempool.value : { error: mempool.reason?.message ?? String(mempool.reason) },
           indexer: indexer.status === "fulfilled" ? indexer.value : { error: indexer.reason?.message ?? String(indexer.reason) },
           syncing: sync.status === "fulfilled" ? sync.value : { error: sync.reason?.message ?? String(sync.reason) },
+        },
+      });
+    }
+    if (/(cluster|operator|validator|prover|gpu|foundation|decentralization|decentralisation|stake|staking|archive service|oracle service)/i.test(question)) {
+      const registry = await loadClusters();
+      const region = /\beu\b|europe/i.test(question)
+        ? "EU"
+        : /\bna\b|us|america/i.test(question)
+          ? "NA"
+          : /apac|asia|singapore/i.test(question)
+            ? "APAC"
+            : undefined;
+      const serviceType: ClusterServiceType | undefined = /prover|gpu/i.test(question)
+        ? "prover"
+        : /archive/i.test(question)
+          ? "archive"
+          : /\boracle\b/i.test(question)
+            ? "oracle"
+            : /\brpc\b/i.test(question)
+              ? "rpc"
+              : undefined;
+      const foundationControlled = /foundation[-\s]?controlled|foundation/i.test(question)
+        ? !/(not foundation|non[-\s]?foundation|community)/i.test(question)
+        : /decentralization|decentralisation|stake|staking/i.test(question)
+          ? false
+          : undefined;
+      if (/operator/i.test(question)) {
+        return asText({
+          question,
+          intent: "operator_search",
+          typedTool: "operator_search",
+          sources: [{ type: "local_registry", path: CLUSTER_REGISTRY_PATH, hash: registry.contentHash }],
+          result: {
+            registry: clusterRegistrySummary(registry),
+            operators: listOperators(registry.registry, {
+              region,
+              foundationControlled,
+              openSeatInterest: /open seat|apply|onboard/i.test(question) ? true : undefined,
+              limit: limit ?? 10,
+            }).map((operator) => operatorStatus(registry.registry, operator)),
+          },
+        });
+      }
+      const serviceResults = serviceType
+        ? searchServices(registry.registry, {
+            serviceType,
+            region,
+            activeOnly: true,
+            limit: limit ?? 10,
+          })
+        : undefined;
+      const clusters = listClusters(registry.registry, {
+        region,
+        serviceType,
+        foundationControlled,
+        gpuRequired: /gpu/i.test(question) ? true : undefined,
+        minOpenSeats: /open seat|operator|decentralization|decentralisation|stake|staking/i.test(question) ? 1 : undefined,
+        limit: limit ?? 10,
+      });
+      return asText({
+        question,
+        intent: serviceType ? `${serviceType}_service_search` : "cluster_search",
+        typedTool: serviceType === "prover" ? "prover_service_search" : serviceType ? `${serviceType}_service_search` : "cluster_search",
+        sources: [{ type: "local_registry", path: CLUSTER_REGISTRY_PATH, hash: registry.contentHash }],
+        result: {
+          registry: clusterRegistrySummary(registry),
+          services: serviceResults,
+          clusters: clusters.map((cluster) => ({
+            ...cluster,
+            reputationSummary: clusterReputation(cluster),
+            foundation: clusterFoundationFlag(cluster),
+            sunset: clusterSunsetStatus(cluster),
+          })),
+          examples: [
+            "Show EU clusters with GPU prover service.",
+            "Which clusters are Foundation-controlled?",
+            "Which clusters maximize decentralization for my stake?",
+          ],
         },
       });
     }
@@ -4056,6 +4158,245 @@ server.tool(
       ],
     });
   },
+);
+
+server.tool("cluster_registry_info", "Show local cluster/operator registry metadata, hashes, regions, statuses, and services.", {}, async () => {
+  const registry = await loadClusters();
+  return text(clusterRegistrySummary(registry));
+});
+
+server.tool(
+  "cluster_search",
+  "Search local cluster metadata by region, service, status, foundation control, GPU availability, and open seats.",
+  {
+    query: z.string().optional(),
+    region: z.string().optional(),
+    jurisdiction: z.string().optional(),
+    status: clusterStatusEnum.optional(),
+    serviceType: clusterServiceTypeEnum.optional(),
+    foundationControlled: z.boolean().optional(),
+    gpuRequired: z.boolean().optional(),
+    minOpenSeats: z.number().int().min(0).optional(),
+    limit: z.number().min(1).max(100).optional(),
+  },
+  async ({ query, region, jurisdiction, status, serviceType, foundationControlled, gpuRequired, minOpenSeats, limit }) => {
+    const registry = await loadClusters();
+    const clusters = listClusters(registry.registry, {
+      query,
+      region,
+      jurisdiction,
+      status: status as ClusterStatus | undefined,
+      serviceType: serviceType as ClusterServiceType | undefined,
+      foundationControlled,
+      gpuRequired,
+      minOpenSeats,
+      limit,
+    });
+    return text({
+      registry: clusterRegistrySummary(registry),
+      clusters: clusters.map((cluster) => ({
+        ...cluster,
+        reputationSummary: clusterReputation(cluster),
+        foundation: clusterFoundationFlag(cluster),
+        sunset: clusterSunsetStatus(cluster),
+      })),
+      warning: "Local planning metadata only. TODO(mainnet): replace with signed cluster registry and live indexer data.",
+    });
+  },
+);
+
+server.tool(
+  "cluster_get",
+  "Get one cluster with reputation, foundation-control flag, sunset status, service tiers, and operator roster.",
+  {
+    clusterId: z.string().min(1),
+  },
+  async ({ clusterId }) => {
+    const registry = await loadClusters();
+    const cluster = getCluster(registry.registry, clusterId);
+    return text({
+      registry: clusterRegistrySummary(registry),
+      cluster,
+      reputation: clusterReputation(cluster),
+      foundation: clusterFoundationFlag(cluster),
+      sunset: clusterSunsetStatus(cluster),
+      operators: listOperators(registry.registry, { clusterId, limit: 50 }),
+    });
+  },
+);
+
+server.tool(
+  "cluster_reputation",
+  "Explain one cluster's reputation, uptime, slashing history, service tiers, and decentralization risk.",
+  {
+    clusterId: z.string().min(1),
+  },
+  async ({ clusterId }) => {
+    const registry = await loadClusters();
+    return text(clusterReputation(getCluster(registry.registry, clusterId)));
+  },
+);
+
+server.tool(
+  "cluster_foundation_flag",
+  "Explain whether a cluster is foundation-controlled and what that means for delegation/decentralization.",
+  {
+    clusterId: z.string().min(1),
+  },
+  async ({ clusterId }) => {
+    const registry = await loadClusters();
+    return text(clusterFoundationFlag(getCluster(registry.registry, clusterId)));
+  },
+);
+
+server.tool(
+  "cluster_sunset_status",
+  "Explain whether a cluster is active, sunsetting, retired, or unsafe for new delegation/routing.",
+  {
+    clusterId: z.string().min(1),
+  },
+  async ({ clusterId }) => {
+    const registry = await loadClusters();
+    return text(clusterSunsetStatus(getCluster(registry.registry, clusterId)));
+  },
+);
+
+server.tool(
+  "operator_search",
+  "Search local operator metadata by region, cluster, foundation control, and open-seat interest.",
+  {
+    query: z.string().optional(),
+    region: z.string().optional(),
+    clusterId: z.string().optional(),
+    foundationControlled: z.boolean().optional(),
+    openSeatInterest: z.boolean().optional(),
+    limit: z.number().min(1).max(100).optional(),
+  },
+  async ({ query, region, clusterId, foundationControlled, openSeatInterest, limit }) => {
+    const registry = await loadClusters();
+    return text({
+      registry: clusterRegistrySummary(registry),
+      operators: listOperators(registry.registry, { query, region, clusterId, foundationControlled, openSeatInterest, limit })
+        .map((operator) => operatorStatus(registry.registry, operator)),
+      warning: "Local planning metadata only. TODO(mainnet): replace with signed operator registry and TPM attestation data.",
+    });
+  },
+);
+
+server.tool(
+  "operator_get",
+  "Get one operator's local cluster membership, reputation, open seats, and attestation status.",
+  {
+    operatorId: z.string().min(1),
+  },
+  async ({ operatorId }) => {
+    const registry = await loadClusters();
+    const operator = getOperator(registry.registry, operatorId);
+    return text({
+      registry: clusterRegistrySummary(registry),
+      ...operatorStatus(registry.registry, operator),
+    });
+  },
+);
+
+server.tool(
+  "operator_open_seats",
+  "List clusters/operators with open operator seats for onboarding or decentralization planning.",
+  {
+    operatorId: z.string().optional(),
+    region: z.string().optional(),
+    serviceType: clusterServiceTypeEnum.optional(),
+    limit: z.number().min(1).max(100).optional(),
+  },
+  async ({ operatorId, region, serviceType, limit }) => {
+    const registry = await loadClusters();
+    const operator = operatorId ? getOperator(registry.registry, operatorId) : null;
+    const clusters = listClusters(registry.registry, {
+      region,
+      serviceType: serviceType as ClusterServiceType | undefined,
+      minOpenSeats: 1,
+      limit,
+    }).filter((cluster) => !operator || operator.clusterIds?.includes(cluster.id) || operator.openSeatInterest);
+    return text({
+      registry: clusterRegistrySummary(registry),
+      operator: operator ? operatorStatus(registry.registry, operator) : undefined,
+      clusters: clusters.map((cluster) => ({
+        cluster,
+        openSeats: cluster.operatorSeats?.open ?? 0,
+        reputation: clusterReputation(cluster),
+      })),
+      warning: "Open seats are local metadata. TODO(mainnet): use live operator registry and application flow.",
+    });
+  },
+);
+
+async function serviceSearchResponse(serviceType: ClusterServiceType, args: {
+  region?: string;
+  gpuClass?: string;
+  maxLatencyMs?: number;
+  activeOnly?: boolean;
+  limit?: number;
+}) {
+  const registry = await loadClusters();
+  return {
+    registry: clusterRegistrySummary(registry),
+    serviceType,
+    services: searchServices(registry.registry, {
+      serviceType,
+      region: args.region,
+      gpuClass: args.gpuClass,
+      maxLatencyMs: args.maxLatencyMs,
+      activeOnly: args.activeOnly ?? true,
+      limit: args.limit,
+    }),
+    warning: "Service pricing/capacity is local planning metadata until live service-tier markets are exposed.",
+  };
+}
+
+server.tool(
+  "rpc_service_search",
+  "Search local RPC service tiers by region and active status.",
+  {
+    region: z.string().optional(),
+    activeOnly: z.boolean().optional(),
+    limit: z.number().min(1).max(100).optional(),
+  },
+  async (args) => text(await serviceSearchResponse("rpc", args)),
+);
+
+server.tool(
+  "archive_service_search",
+  "Search local archive-node service tiers by region and active status.",
+  {
+    region: z.string().optional(),
+    activeOnly: z.boolean().optional(),
+    limit: z.number().min(1).max(100).optional(),
+  },
+  async (args) => text(await serviceSearchResponse("archive", args)),
+);
+
+server.tool(
+  "prover_service_search",
+  "Search local GPU prover service tiers by region, GPU class, latency, and active status.",
+  {
+    region: z.string().optional(),
+    gpuClass: z.string().optional(),
+    maxLatencyMs: z.number().min(1).optional(),
+    activeOnly: z.boolean().optional(),
+    limit: z.number().min(1).max(100).optional(),
+  },
+  async (args) => text(await serviceSearchResponse("prover", args)),
+);
+
+server.tool(
+  "oracle_service_search",
+  "Search local oracle service tiers by region and active status.",
+  {
+    region: z.string().optional(),
+    activeOnly: z.boolean().optional(),
+    limit: z.number().min(1).max(100).optional(),
+  },
+  async (args) => text(await serviceSearchResponse("oracle", args)),
 );
 
 server.tool("vendor_registry_info", "Show vendor registry metadata, hashes, signature status, and category summary.", {}, async () => {

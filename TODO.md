@@ -362,8 +362,10 @@ Whitepaper refs: §14, §20, §23, §28, §30.5.
 - [ ] **CORE SDK INDEXER** Cluster registry tools.
   - `cluster_list`, `cluster_get`, `cluster_reputation`, `cluster_foundation_flag`, `cluster_sunset_status`.
   - Show roster, uptime, slashing history, service tiers, geography, ASN diversity, hardware class.
+  - Local MCP planning shim implemented as `cluster_registry_info`, `cluster_search`, `cluster_get`, `cluster_reputation`, `cluster_foundation_flag`, and `cluster_sunset_status`; replace with core/indexer data for mainnet.
 - [ ] **CORE SDK INDEXER** Operator registry tools.
   - `operator_get`, `operator_open_seats`, `operator_apply_draft`, `operator_reputation`, `operator_attestation_status`.
+  - Local MCP planning shim implemented as `operator_search`, `operator_get`, and `operator_open_seats`; application drafts and live attestation remain TODO(core/indexer).
 - [ ] **CORE SDK INDEXER** Node registry / TPM attestation tools.
   - `node_attestation_get`, `node_pcr_explain`, `node_diversity_score`, `node_hosting_class`.
 - [ ] **CORE SDK** Delegation tools.
@@ -374,6 +376,7 @@ Whitepaper refs: §14, §20, §23, §28, §30.5.
 - [ ] **CORE SDK INDEXER** Service-tier market tools.
   - `rpc_service_search`, `archive_service_search`, `prover_service_search`, `oracle_service_search`.
   - Show price, uptime, capacity, GPU class, proof latency, reputation.
+  - Local MCP planning shim implemented for RPC/archive/prover/oracle search; live service-tier markets remain TODO(core/indexer).
 - [ ] **MCP** GPU proof market assistant.
   - Route zkML/bridge proof requests to available prover services.
   - Show expected proof time, fee, and verifier status.
@@ -415,10 +418,11 @@ Whitepaper refs: §27.8, §28.5, §99.3.
   - "Find a plumber near me under 150 LYTH."
   - "Find an arbiter for a high-value escrow."
   - Implemented initial examples through `ask_chain` vendor/provider routing. Reputation, availability, and arbiter indexes remain TODO(core/indexer).
-- [ ] **MCP** Cluster/operator search examples.
+- [x] **MCP** Cluster/operator search examples.
   - "Show EU clusters with GPU prover service."
   - "Which clusters are Foundation-controlled?"
   - "Which clusters maximize decentralization for my stake?"
+  - Implemented through local `clusters.example.json`, cluster/operator/service tools, and `ask_chain` routing. Live registry/indexer remains TODO(core/indexer).
 - [x] **MCP** Transaction explanation.
   - "Why did this transaction revert?"
   - Decode typed errors, policy failures, bridge failures, privacy cordon violations, and contract reverts.

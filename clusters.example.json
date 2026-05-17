@@ -1,0 +1,229 @@
+{
+  "schemaVersion": 1,
+  "network": "testnet-69420",
+  "issuer": "monolythium-vision",
+  "updatedAt": "2026-05-17T00:00:00.000Z",
+  "disclaimer": "Example planning metadata for MCP cluster/operator UX. TODO(mainnet): replace with signed core/indexer cluster registry reads.",
+  "clusters": [
+    {
+      "id": "mono-eu-1",
+      "displayName": "Mono EU Foundation Cluster",
+      "region": "EU",
+      "jurisdiction": "DE",
+      "status": "active",
+      "foundationControlled": true,
+      "quorum": "7-of-10",
+      "operatorSeats": { "total": 10, "open": 1 },
+      "serviceTiers": [
+        { "type": "rpc", "status": "active", "pricePerMonth": "120", "asset": "LYTH", "uptime30d": 99.92 },
+        { "type": "archive", "status": "active", "pricePerMonth": "340", "asset": "LYTH", "uptime30d": 99.8 },
+        { "type": "prover", "status": "active", "gpuClass": "L40S", "capacity": "8 GPUs", "proofLatencyMsP50": 850, "pricePerProof": "0.08", "asset": "LYTH", "uptime30d": 99.7 },
+        { "type": "oracle", "status": "draft", "pricePerMonth": "160", "asset": "LYTH", "uptime30d": 99.5 }
+      ],
+      "reputation": {
+        "score": 82,
+        "uptime30d": 99.91,
+        "slashingIncidents": 0,
+        "missedRounds30d": 2,
+        "responseTimeMsP50": 90,
+        "communityTrust": 75
+      },
+      "diversity": {
+        "asnCount": 4,
+        "hostingClass": "mixed_cloud_baremetal",
+        "clientDiversity": 3,
+        "geographicDiversity": 2,
+        "decentralizationScore": 68
+      },
+      "hardware": {
+        "cpuClass": "zen4",
+        "ramGb": 512,
+        "storageTb": 40,
+        "gpu": true,
+        "gpuClass": "L40S"
+      },
+      "operators": ["foundation-labs", "rhein-validator", "atlas-provers"],
+      "notes": [
+        "Foundation-controlled cluster is useful for bootstrap reliability but should not be the default for maximum decentralization.",
+        "TODO(mainnet): replace with signed cluster roster and live service-capacity feeds."
+      ]
+    },
+    {
+      "id": "mono-nl-community-1",
+      "displayName": "Mono NL Community Cluster",
+      "region": "EU",
+      "jurisdiction": "NL",
+      "status": "active",
+      "foundationControlled": false,
+      "quorum": "7-of-10",
+      "operatorSeats": { "total": 10, "open": 3 },
+      "serviceTiers": [
+        { "type": "rpc", "status": "active", "pricePerMonth": "95", "asset": "LYTH", "uptime30d": 99.64 },
+        { "type": "archive", "status": "active", "pricePerMonth": "290", "asset": "LYTH", "uptime30d": 99.42 },
+        { "type": "prover", "status": "active", "gpuClass": "A100", "capacity": "4 GPUs", "proofLatencyMsP50": 720, "pricePerProof": "0.11", "asset": "LYTH", "uptime30d": 99.2 }
+      ],
+      "reputation": {
+        "score": 88,
+        "uptime30d": 99.6,
+        "slashingIncidents": 0,
+        "missedRounds30d": 4,
+        "responseTimeMsP50": 105,
+        "communityTrust": 91
+      },
+      "diversity": {
+        "asnCount": 7,
+        "hostingClass": "community_baremetal",
+        "clientDiversity": 4,
+        "geographicDiversity": 3,
+        "decentralizationScore": 91
+      },
+      "hardware": {
+        "cpuClass": "epyc",
+        "ramGb": 384,
+        "storageTb": 32,
+        "gpu": true,
+        "gpuClass": "A100"
+      },
+      "operators": ["tulip-infra", "atlas-provers", "lowlands-nodeworks"],
+      "notes": [
+        "Strong decentralization candidate with open operator seats.",
+        "TODO(mainnet): verify TPM attestations and live quorum participation."
+      ]
+    },
+    {
+      "id": "mono-us-west-1",
+      "displayName": "Mono US West Prover Cluster",
+      "region": "NA",
+      "jurisdiction": "US",
+      "status": "active",
+      "foundationControlled": false,
+      "quorum": "7-of-10",
+      "operatorSeats": { "total": 10, "open": 2 },
+      "serviceTiers": [
+        { "type": "rpc", "status": "active", "pricePerMonth": "105", "asset": "LYTH", "uptime30d": 99.7 },
+        { "type": "prover", "status": "active", "gpuClass": "H100", "capacity": "6 GPUs", "proofLatencyMsP50": 510, "pricePerProof": "0.16", "asset": "LYTH", "uptime30d": 99.55 },
+        { "type": "oracle", "status": "active", "pricePerMonth": "180", "asset": "LYTH", "uptime30d": 99.4 }
+      ],
+      "reputation": {
+        "score": 84,
+        "uptime30d": 99.68,
+        "slashingIncidents": 0,
+        "missedRounds30d": 3,
+        "responseTimeMsP50": 78,
+        "communityTrust": 80
+      },
+      "diversity": {
+        "asnCount": 5,
+        "hostingClass": "mixed_cloud_baremetal",
+        "clientDiversity": 3,
+        "geographicDiversity": 2,
+        "decentralizationScore": 78
+      },
+      "hardware": {
+        "cpuClass": "zen4",
+        "ramGb": 768,
+        "storageTb": 48,
+        "gpu": true,
+        "gpuClass": "H100"
+      },
+      "operators": ["pacific-stake", "atlas-provers"],
+      "notes": [
+        "Best proof latency in the example registry, but weaker decentralization than the NL community cluster."
+      ]
+    },
+    {
+      "id": "mono-sg-1",
+      "displayName": "Mono Singapore Edge Cluster",
+      "region": "APAC",
+      "jurisdiction": "SG",
+      "status": "draft",
+      "foundationControlled": false,
+      "quorum": "7-of-10",
+      "operatorSeats": { "total": 10, "open": 6 },
+      "serviceTiers": [
+        { "type": "rpc", "status": "draft", "pricePerMonth": "130", "asset": "LYTH", "uptime30d": 0 },
+        { "type": "oracle", "status": "draft", "pricePerMonth": "190", "asset": "LYTH", "uptime30d": 0 }
+      ],
+      "reputation": {
+        "score": 45,
+        "uptime30d": 0,
+        "slashingIncidents": 0,
+        "missedRounds30d": 0,
+        "responseTimeMsP50": 0,
+        "communityTrust": 45
+      },
+      "diversity": {
+        "asnCount": 2,
+        "hostingClass": "planned_mixed",
+        "clientDiversity": 1,
+        "geographicDiversity": 1,
+        "decentralizationScore": 52
+      },
+      "hardware": {
+        "cpuClass": "planned",
+        "ramGb": 256,
+        "storageTb": 20,
+        "gpu": false
+      },
+      "operators": ["singapore-edge"],
+      "sunset": {
+        "planned": false
+      },
+      "notes": [
+        "Draft cluster for APAC coverage. Not suitable for production routing yet."
+      ]
+    }
+  ],
+  "operators": [
+    {
+      "id": "foundation-labs",
+      "displayName": "Foundation Labs",
+      "region": "EU",
+      "foundationControlled": true,
+      "clusterIds": ["mono-eu-1"],
+      "openSeatInterest": false,
+      "reputation": { "score": 78, "uptime30d": 99.95, "slashingIncidents": 0 },
+      "attestation": { "status": "draft", "method": "manual", "notes": "TODO(mainnet): replace with TPM/PCR attestation." }
+    },
+    {
+      "id": "atlas-provers",
+      "displayName": "Atlas Provers",
+      "region": "global",
+      "foundationControlled": false,
+      "clusterIds": ["mono-eu-1", "mono-nl-community-1", "mono-us-west-1"],
+      "openSeatInterest": true,
+      "reputation": { "score": 89, "uptime30d": 99.58, "slashingIncidents": 0 },
+      "attestation": { "status": "draft", "method": "manual", "notes": "GPU inventory is example metadata only." }
+    },
+    {
+      "id": "tulip-infra",
+      "displayName": "Tulip Infra",
+      "region": "EU",
+      "foundationControlled": false,
+      "clusterIds": ["mono-nl-community-1"],
+      "openSeatInterest": true,
+      "reputation": { "score": 86, "uptime30d": 99.62, "slashingIncidents": 0 },
+      "attestation": { "status": "draft", "method": "manual" }
+    },
+    {
+      "id": "pacific-stake",
+      "displayName": "Pacific Stake",
+      "region": "NA",
+      "foundationControlled": false,
+      "clusterIds": ["mono-us-west-1"],
+      "openSeatInterest": true,
+      "reputation": { "score": 81, "uptime30d": 99.4, "slashingIncidents": 0 },
+      "attestation": { "status": "draft", "method": "manual" }
+    },
+    {
+      "id": "singapore-edge",
+      "displayName": "Singapore Edge",
+      "region": "APAC",
+      "foundationControlled": false,
+      "clusterIds": ["mono-sg-1"],
+      "openSeatInterest": true,
+      "reputation": { "score": 48, "uptime30d": 0, "slashingIncidents": 0 },
+      "attestation": { "status": "draft", "method": "manual" }
+    }
+  ]
+}

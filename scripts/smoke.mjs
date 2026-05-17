@@ -21,6 +21,7 @@ const runbooks = await import("../dist/runbooks.js");
 const commerceSafety = await import("../dist/commerce_safety.js");
 const riskRenderer = await import("../dist/risk_renderer.js");
 const errorExplain = await import("../dist/error_explain.js");
+const clusters = await import("../dist/clusters.js");
 
 function assert(condition, message) {
   if (!condition) {
@@ -159,6 +160,16 @@ const privacyError = errorExplain.explainError({
 assert(mempoolError.classification === "mempool_envelope_decryption" && mempoolError.retryable === true, "expected mempool decryption error to be retryable");
 assert(privacyError.classification === "privacy_policy" && privacyError.retryable === false, "expected privacy policy error to be blocked");
 
+const clusterRegistry = await clusters.loadClusterRegistry("./clusters.example.json");
+const euProvers = clusters.searchServices(clusterRegistry.registry, { serviceType: "prover", region: "EU", activeOnly: true });
+const foundationClusters = clusters.listClusters(clusterRegistry.registry, { foundationControlled: true });
+const decentralizationClusters = clusters.listClusters(clusterRegistry.registry, { foundationControlled: false, minOpenSeats: 1 });
+const operator = clusters.getOperator(clusterRegistry.registry, "atlas-provers");
+assert(euProvers.some((entry) => entry.clusterId === "mono-nl-community-1"), "expected EU prover service search to include NL community cluster");
+assert(foundationClusters.some((cluster) => cluster.id === "mono-eu-1"), "expected foundation cluster flag search");
+assert(decentralizationClusters[0].id === "mono-nl-community-1", "expected NL community cluster to lead decentralization candidates");
+assert(clusters.operatorStatus(clusterRegistry.registry, operator).openSeats > 0, "expected atlas-provers to have open-seat exposure");
+
 const runbookList = await runbooks.listCanonicalRunbooks("./runbooks");
 assert(runbookList.length >= 9, "expected bundled canonical runbooks");
 
@@ -174,5 +185,7 @@ console.log(JSON.stringify({
   assets: assetRegistry.registry.assets.length,
   blockedCommerce: blockedCommerce.level,
   explainedError: mempoolError.classification,
+  clusters: clusterRegistry.registry.clusters.length,
+  euProvers: euProvers.length,
   runbooks: runbookList.length,
 }, null, 2));

@@ -148,6 +148,7 @@ examples/claude_desktop_config.json
 | `LYTH_MCP_VENDOR_REGISTRY` | bundled `vendors.example.json` | Optional path override for local vendor registry JSON |
 | `LYTH_MCP_ASSET_REGISTRY` | bundled `asset_registry.example.json` | Optional path override for local asset/risk metadata |
 | `LYTH_MCP_BRIDGE_ROUTE_REGISTRY` | bundled `bridge_routes.example.json` | Optional path override for local bridge/liquidity route metadata |
+| `LYTH_MCP_CLUSTER_REGISTRY` | bundled `clusters.example.json` | Optional path override for local cluster/operator/service-tier metadata |
 | `LYTH_MCP_ENABLE_SUBMIT` | `0` | Set to `1` to allow broadcasting already-signed payloads |
 | `LYTH_MCP_WALLET_STORE` | `~/.lyth_mcp/wallets.json` | Local encrypted wallet store path |
 | `LYTH_MCP_HOT_KEY` | `~/.lyth_mcp/hot.key` | Local key file used only for opt-in low-value mode |
@@ -224,6 +225,19 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `bridge_status_summary` | Summarize route health, drain caps, and attention flags |
 | `bridge_circuit_breaker_watch` | Alert on paused/non-active routes, trusted-route risk, missing audits, and low drain caps |
 | `liquidity_onboarding` | Explain how to bring an asset into Mono through configured routes |
+| `cluster_registry_info` | Show local cluster/operator registry metadata and hashes |
+| `cluster_search` | Search clusters by region, service, status, foundation control, GPU, and open seats |
+| `cluster_get` | Get one cluster with reputation, foundation, sunset, service, and operator detail |
+| `cluster_reputation` | Explain cluster reputation, uptime, slashing, services, and decentralization risk |
+| `cluster_foundation_flag` | Explain foundation-control implications for delegation |
+| `cluster_sunset_status` | Explain whether a cluster is active, sunsetting, or retired |
+| `operator_search` | Search local operators by region, cluster, foundation control, and open-seat interest |
+| `operator_get` | Get one operator's clusters, reputation, open seats, and attestation status |
+| `operator_open_seats` | List clusters/operators with open operator seats |
+| `rpc_service_search` | Search local RPC service tiers |
+| `archive_service_search` | Search local archive service tiers |
+| `prover_service_search` | Search local GPU prover service tiers |
+| `oracle_service_search` | Search local oracle service tiers |
 | `vendor_registry_info` | Show registry hashes, issuer, expiry, signature status, and categories |
 | `vendor_get` | Get one vendor by id |
 | `provider_onboarding_draft` | Draft vendor registry, merchant policy, availability, and connector metadata |
@@ -378,6 +392,22 @@ The bundled cooldown posture is:
 | Solana | 1-2 epochs depending on finality confidence |
 | Bitcoin | 2 epochs or value-tiered limits |
 | Trusted/transitional bridge | Longer cooldown, e.g. 7 days, until zk/light-client path replaces it |
+
+## Cluster And Operator Registry
+
+By default, the MCP loads `clusters.example.json`. This is local planning metadata for operator UX, cluster discovery, delegation decisions, and service-tier routing. It is not a live validator registry.
+
+The local registry lets an assistant answer:
+
+- which clusters exist by region, jurisdiction, status, and open operator seats;
+- which clusters are Foundation-controlled;
+- which clusters expose RPC, archive, GPU prover, or oracle services;
+- which clusters are better candidates for max-decentralization delegation;
+- which operators have draft reputation, cluster membership, and attestation status.
+
+Use `cluster_search`, `cluster_reputation`, `cluster_foundation_flag`, and `cluster_sunset_status` for delegation explanations. Use `prover_service_search`, `rpc_service_search`, `archive_service_search`, and `oracle_service_search` for service-tier routing. `ask_chain` routes questions such as "Show EU clusters with GPU prover service" and "Which clusters maximize decentralization for my stake?" into these typed tools and returns the local registry hash it used.
+
+Every cluster/operator response includes TODO(mainnet) assumptions. Production needs signed cluster metadata, live quorum/uptime/slashing feeds, TPM/PCR attestation, service-capacity feeds, and delegation cap checks from core/indexer.
 
 ## Wallet Setup
 
