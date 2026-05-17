@@ -35,6 +35,7 @@ export interface WalletRecord {
   createdAt: string;
   encryptedMnemonic: EncryptedPayload;
   lowValue?: LowValuePolicy;
+  agent?: AgentWalletMetadata;
 }
 
 export interface WalletStore {
@@ -51,6 +52,18 @@ export interface LowValuePolicy {
   spentToday?: string;
   configuredAt: string;
   encryptedMnemonic: EncryptedPayload;
+}
+
+export interface AgentWalletMetadata {
+  purpose?: string;
+  network?: string;
+  maxBalance?: string;
+  allowedCounterparties?: string[];
+  allowedCategories?: string[];
+  expiresAt?: string;
+  fallbackApproval?: "passphrase" | "wallet_handoff" | "deny";
+  paused?: boolean;
+  updatedAt: string;
 }
 
 export interface EncryptedPayload {
@@ -76,6 +89,7 @@ export interface WalletSummary {
   keyProtection: "passphrase" | "local_machine_key";
   createdAt: string;
   lowValue?: Omit<LowValuePolicy, "encryptedMnemonic">;
+  agent?: AgentWalletMetadata;
 }
 
 export interface BuiltTransfer {
@@ -96,7 +110,7 @@ export interface BuiltTransfer {
     }>;
   };
   signed?: {
-    mode: "passphrase" | "low_value";
+    mode: "passphrase" | "local_machine_key" | "low_value";
     signedInnerTxHex: string;
     innerSighashHex: string;
     innerWireBytes: number;
@@ -184,6 +198,7 @@ export async function createWallet(args: {
     maxAmount: string;
     dailyLimit?: string;
   };
+  agent?: Omit<AgentWalletMetadata, "updatedAt">;
 }): Promise<WalletSummary & { mnemonic?: string; storePath: string }> {
   const key = await resolveNewWalletKey(args.passphrase, args.allowLocalKey === true);
   const store = await readWalletStore();
@@ -205,6 +220,12 @@ export async function createWallet(args: {
   };
   if (args.lowValue?.enabled) {
     record.lowValue = await createLowValuePolicy(mnemonic, args.lowValue.maxAmount, args.lowValue.dailyLimit);
+  }
+  if (args.agent) {
+    record.agent = {
+      ...args.agent,
+      updatedAt: new Date().toISOString(),
+    };
   }
 
   const next = existing
@@ -230,6 +251,7 @@ export async function importWallet(args: {
     maxAmount: string;
     dailyLimit?: string;
   };
+  agent?: Omit<AgentWalletMetadata, "updatedAt">;
 }): Promise<WalletSummary & { storePath: string }> {
   const key = await resolveNewWalletKey(args.passphrase, args.allowLocalKey === true);
   const address = pqm1MnemonicToAddress(args.mnemonic);
@@ -250,6 +272,12 @@ export async function importWallet(args: {
   };
   if (args.lowValue?.enabled) {
     record.lowValue = await createLowValuePolicy(args.mnemonic, args.lowValue.maxAmount, args.lowValue.dailyLimit);
+  }
+  if (args.agent) {
+    record.agent = {
+      ...args.agent,
+      updatedAt: new Date().toISOString(),
+    };
   }
   const next = existing
     ? store.wallets.map((w) => (w.name === args.name ? record : w))
@@ -302,6 +330,26 @@ export async function configureLowValuePolicy(args: {
   return summarizeWallet(record);
 }
 
+export async function updateAgentWalletMetadata(args: {
+  name: string;
+  patch: Partial<Omit<AgentWalletMetadata, "updatedAt">>;
+}): Promise<WalletSummary> {
+  const store = await readWalletStore();
+  const index = store.wallets.findIndex((w) => w.name === args.name);
+  if (index < 0) {
+    throw new Error(`wallet '${args.name}' not found`);
+  }
+  const record = store.wallets[index]!;
+  record.agent = {
+    ...(record.agent ?? {}),
+    ...args.patch,
+    updatedAt: new Date().toISOString(),
+  };
+  store.wallets[index] = record;
+  await writeWalletStore(store);
+  return summarizeWallet(record);
+}
+
 export async function deleteWallet(name: string, confirmName: string): Promise<{ deleted: boolean; storePath: string }> {
   if (name !== confirmName) {
     throw new Error("confirmName must exactly match name");
@@ -338,6 +386,7 @@ export async function buildTransfer(args: {
   encryptionKey?: EncryptionKey;
   sign?: boolean;
   allowLowValueSigning?: boolean;
+  allowLocalKeySigning?: boolean;
 }): Promise<BuiltTransfer> {
   const record = await getWallet(args.walletName);
   const tx: NativeEvmTxFields = {
@@ -378,6 +427,7 @@ export async function buildTransfer(args: {
         amountUnits: args.amountUnits,
         passphrase: args.passphrase,
         allowLowValueSigning: args.allowLowValueSigning ?? true,
+        allowLocalKeySigning: args.allowLocalKeySigning ?? false,
       });
   if (signer !== null) {
     if (!args.encryptionKey) {
@@ -429,6 +479,7 @@ export function summarizeWallet(record: WalletRecord): WalletSummary {
           configuredAt: record.lowValue.configuredAt,
         }
       : undefined,
+    agent: record.agent,
   };
 }
 
@@ -515,12 +566,19 @@ async function resolveSigningBackend(args: {
   amountUnits: bigint;
   passphrase?: string;
   allowLowValueSigning: boolean;
-}): Promise<{ mode: "passphrase" | "low_value"; backend: MlDsa65Backend } | null> {
+  allowLocalKeySigning: boolean;
+}): Promise<{ mode: "passphrase" | "local_machine_key" | "low_value"; backend: MlDsa65Backend } | null> {
   const record = await getWallet(args.walletName);
   if (walletKeyProtection(record) === "passphrase" && (args.passphrase !== undefined || process.env.LYTH_MCP_WALLET_PASSPHRASE)) {
     return {
       mode: "passphrase",
       backend: await unlockBackend(args.walletName, args.passphrase),
+    };
+  }
+  if (walletKeyProtection(record) === "local_machine_key" && args.allowLocalKeySigning) {
+    return {
+      mode: "local_machine_key",
+      backend: await unlockBackend(args.walletName),
     };
   }
   if (!args.allowLowValueSigning) {
@@ -631,7 +689,7 @@ function decimalToUnits(input: string, decimals = 18): bigint {
   return BigInt(whole + frac.padEnd(decimals, "0"));
 }
 
-function unitsToDecimal(value: bigint, decimals = 18): string {
+export function unitsToDecimal(value: bigint, decimals = 18): string {
   const sign = value < 0n ? "-" : "";
   const raw = (value < 0n ? -value : value).toString().padStart(decimals + 1, "0");
   const whole = raw.slice(0, -decimals);

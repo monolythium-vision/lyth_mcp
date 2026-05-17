@@ -151,6 +151,8 @@ examples/claude_desktop_config.json
 | `LYTH_MCP_HOT_KEY` | `~/.lyth_mcp/hot.key` | Local key file used only for opt-in low-value mode |
 | `LYTH_MCP_LOCAL_KEY` | `~/.lyth_mcp/local.key` | Local machine key used for passphrase-less agent wallets |
 | `LYTH_MCP_ADDRESSBOOK` | `~/.lyth_mcp/addressbook.json` | Local contact/addressbook store path |
+| `LYTH_MCP_OUTBOX` | `~/.lyth_mcp/outbox.json` | Local signed-payload outbox for retrying without rebuilding/re-signing |
+| `LYTH_MCP_RECEIPTS` | `~/.lyth_mcp/receipts.json` | Local receipt store for drafted/signed/submitted/failed operations |
 | `LYTH_MCP_WALLET_PASSPHRASE` | unset | Optional env passphrase for unattended passphrase signing; safer to pass per call |
 | `LYTH_MCP_DEFAULT_LOW_VALUE_MAX` | `10` | Default LYTH per-transaction cap for passphrase-less wallets |
 | `LYTH_MCP_DEFAULT_LOW_VALUE_DAILY_LIMIT` | `50` | Default LYTH daily cap for passphrase-less wallets |
@@ -168,12 +170,15 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | Tool | Purpose |
 |---|---|
 | `chain_status` | Probe RPC endpoints and return chain, round, mempool, indexer, and sync status |
+| `mcp_self_check` | Check install/config/store/RPC health |
 | `account_overview` | Get balance, nonce, label, profile, and flow for an address |
 | `recent_transactions` | Read recent transactions from `lyth_txFeed` |
 | `tx_lookup` | Look up status, receipt, transaction, and decoded view by tx hash |
+| `tx_status_summary` | Summarize status by tx hash or outbox id |
 | `search_chain` | Search addresses, hashes, blocks, clusters, and labels |
 | `markets` | List live CLOB markets or inspect one market with optional book/trades |
 | `api_get` | Low-level read-only helper for `/api/v1` |
+| `mcp_dashboard` | Render a compact Markdown dashboard for Claude Code/text clients |
 
 ### AI Runbook Tools
 
@@ -184,7 +189,14 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `validate_runbook` | Check a runbook against spending policy and safety rules |
 | `prepare_wallet_request` | Prepare a wallet approval payload where supported |
 | `vendor_search` | Search a local vendor registry JSON |
-| `submit_signed_transaction` | Broadcast an already-signed payload, disabled unless explicitly enabled |
+| `submit_signed_transaction` | Broadcast an already-signed payload, disabled unless explicitly enabled; can update an outbox id |
+| `tx_outbox_list` | List local signed payloads that can be retried |
+| `tx_outbox_get` | Inspect one local signed payload |
+| `tx_outbox_retry` | Retry a signed payload without rebuilding/re-signing |
+| `tx_outbox_forget` | Remove a local outbox entry without invalidating the signed payload |
+| `receipt_list` | List local MCP operation receipts |
+| `receipt_get` | Inspect one local MCP receipt |
+| `receipt_export` | Export one receipt as JSON |
 
 ### Local Wallet Tools
 
@@ -194,6 +206,12 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `wallet_setup` | Create a local encrypted PQM-1/ML-DSA-65 agent wallet |
 | `wallet_import` | Import an existing PQM-1 mnemonic into the encrypted store |
 | `wallet_list` | List local wallets and low-value policy status |
+| `agent_wallet_create` | Create an explicit low-value agent operating wallet with purpose and caps |
+| `agent_wallet_fund_request` | Draft a funding request for an agent wallet |
+| `agent_wallet_limits` | Update an agent wallet's local caps and metadata |
+| `agent_wallet_pause` | Disable low-value signing and mark the agent wallet paused |
+| `agent_wallet_drain` | Prepare/sign a drain transfer back to a principal or recovery address |
+| `agent_wallet_delete` | Delete a local agent wallet record after explicit confirmation |
 | `wallet_configure_low_value` | Enable or disable capped no-passphrase signing |
 | `wallet_export_mnemonic` | Reveal a mnemonic after passphrase confirmation |
 | `wallet_delete` | Delete a local wallet from the store |
@@ -223,6 +241,31 @@ runbooks/
 ```
 
 ## Wallet Setup
+
+For an explicit agent operating wallet, use `agent_wallet_create`. This records the wallet purpose and local caps, then returns a funding address:
+
+```json
+{
+  "name": "pizza-agent",
+  "purpose": "Small food-ordering demos on testnet",
+  "confirm": "CREATE_AGENT_WALLET",
+  "maxBalance": "25",
+  "lowValueMaxAmount": "10",
+  "lowValueDailyLimit": "50",
+  "allowedCategories": ["food"]
+}
+```
+
+The agent can then request funding:
+
+```json
+{
+  "name": "pizza-agent",
+  "amount": "20",
+  "asset": "LYTH",
+  "purpose": "Pizza demo operating budget"
+}
+```
 
 For the fastest testnet demo, ask for a funding address. The MCP creates or returns a local-machine protected wallet named `agent-main` and enables capped no-passphrase signing:
 
@@ -292,6 +335,16 @@ Named contacts can be stored in the local addressbook and then used directly as 
 ```
 
 Amounts above the low-value cap are blocked unless the wallet was passphrase-protected and the passphrase is supplied. Low-value accounting is reserved when the MCP creates a signed payload, not when final settlement is observed, because a signed payload can be submitted later. If broadcast fails, retry the returned `built.signed.encryptedEnvelopeHex` with `submit_signed_transaction`; do not rebuild the transfer unless you intentionally want a new signed payload and a new low-value reservation.
+
+Signed payloads are now also written to the local outbox. Prefer retrying with `tx_outbox_retry`:
+
+```json
+{
+  "id": "outbox_..."
+}
+```
+
+Use `mcp_dashboard` when you want a Claude Code-friendly Markdown view of wallets, outbox entries, and receipts.
 
 ## Example: Pizza Payment Runbook
 

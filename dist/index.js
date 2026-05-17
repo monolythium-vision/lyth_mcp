@@ -17,7 +17,9 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { addressbookInfo, listAddressbookContacts, removeAddressbookContact, resolveAddressbookContact, upsertAddressbookContact, } from "./addressbook.js";
-import { buildTransfer, configureLowValuePolicy, createWallet, deleteWallet, encryptionKeyFromRpc, exportMnemonic, importWallet, listWallets, walletStoreInfo, } from "./wallet.js";
+import { addOutboxEntry, forgetOutboxEntry, getOutboxEntry, listOutboxEntries, outboxInfo, recordOutboxAttempt, updateOutboxStatus, } from "./outbox.js";
+import { addReceipt, getReceipt, listReceipts, receiptInfo, } from "./receipts.js";
+import { buildTransfer, configureLowValuePolicy, createWallet, deleteWallet, encryptionKeyFromRpc, exportMnemonic, importWallet, listWallets, unitsToDecimal, updateAgentWalletMetadata, walletStoreInfo, } from "./wallet.js";
 const DEFAULT_CHAIN_ID = 69420;
 const DEFAULT_NETWORK = "testnet-69420";
 const DEFAULT_RPCS = [
@@ -61,6 +63,7 @@ function compactWallet(wallet) {
         keyProtection: wallet.keyProtection,
         createdAt: wallet.createdAt,
         lowValue: wallet.lowValue,
+        agent: wallet.agent,
     };
 }
 function errorText(message) {
@@ -615,6 +618,63 @@ async function loadVendors() {
         : Object.fromEntries(Object.entries(parsed).filter(([key]) => key !== "vendors"));
     return { source: VENDOR_REGISTRY_PATH, ...metadata, vendors };
 }
+function outboxMethod(kind) {
+    return kind === "eth_raw" ? "eth_sendRawTransaction" : "lyth_submitEncrypted";
+}
+async function submitPayload(endpoint, kind, payloadHex) {
+    return rpcCall(endpoint, outboxMethod(kind), [payloadHex]);
+}
+function mdTable(headers, rows) {
+    const escape = (value) => value.replace(/\|/g, "\\|").replace(/\n/g, " ");
+    return [
+        `| ${headers.map(escape).join(" | ")} |`,
+        `| ${headers.map(() => "---").join(" | ")} |`,
+        ...rows.map((row) => `| ${row.map((value) => escape(value)).join(" | ")} |`),
+    ].join("\n");
+}
+function short(value, left = 6, right = 4) {
+    if (!value) {
+        return "";
+    }
+    return value.length <= left + right + 3 ? value : `${value.slice(0, left)}...${value.slice(-right)}`;
+}
+async function txStatusSummary(args) {
+    const outbox = args.outboxId ? await getOutboxEntry(args.outboxId) : null;
+    const txHash = args.txHash ?? outbox?.txHash;
+    if (!txHash) {
+        return {
+            outbox,
+            status: outbox?.status ?? "not_found",
+            reason: "No tx hash is available yet. The payload may be signed but not submitted.",
+        };
+    }
+    const endpoint = await firstReachableEndpoint();
+    const [status, receipt, tx] = await Promise.allSettled([
+        rpcCall(endpoint, "lyth_txStatus", [txHash]),
+        rpcCall(endpoint, "eth_getTransactionReceipt", [txHash]),
+        rpcCall(endpoint, "eth_getTransactionByHash", [txHash]),
+    ]);
+    let derived = "submitted";
+    if (receipt.status === "fulfilled" && receipt.value) {
+        const receiptObject = receipt.value;
+        derived = receiptObject?.status === "0x0" ? "failed" : "confirmed";
+        if (outbox) {
+            await updateOutboxStatus(outbox.id, derived, txHash);
+        }
+    }
+    else if (tx.status === "fulfilled" && tx.value === null) {
+        derived = "not_found";
+    }
+    return {
+        endpoint,
+        txHash,
+        outbox,
+        derived,
+        status: status.status === "fulfilled" ? status.value : { error: status.reason?.message ?? String(status.reason) },
+        receipt: receipt.status === "fulfilled" ? receipt.value : { error: receipt.reason?.message ?? String(receipt.reason) },
+        transaction: tx.status === "fulfilled" ? tx.value : { error: tx.reason?.message ?? String(tx.reason) },
+    };
+}
 const runbookEnum = z.enum([
     "request_funds",
     "pay_vendor",
@@ -626,6 +686,8 @@ const runbookEnum = z.enum([
     "verify_receipt",
     "rate_vendor",
 ]);
+const outboxStatusEnum = z.enum(["signed", "submitted", "confirmed", "failed", "expired"]);
+const receiptStatusEnum = z.enum(["drafted", "signed", "submitted", "confirmed", "failed"]);
 const recordSchema = z.record(z.unknown()).optional();
 const policySchema = z.object({
     maxAmount: z.string().optional(),
@@ -661,6 +723,43 @@ server.tool("chain_status", "Probe Monolythium live RPC endpoints and return cha
         mempool: mempool.status === "fulfilled" ? mempool.value : { error: mempool.reason?.message ?? String(mempool.reason) },
         indexer: indexer.status === "fulfilled" ? indexer.value : { error: indexer.reason?.message ?? String(indexer.reason) },
         sync: sync.status === "fulfilled" ? sync.value : { error: sync.reason?.message ?? String(sync.reason) },
+    });
+});
+server.tool("mcp_self_check", "Check MCP install, config, stores, and RPC reachability.", {}, async () => {
+    const probes = await Promise.all(CONFIGURED_RPCS.map(probeEndpoint));
+    const selected = probes
+        .filter((probe) => probe.ok)
+        .sort((a, b) => Number(BigInt(b.height ?? "0") - BigInt(a.height ?? "0")) || a.latencyMs - b.latencyMs)[0];
+    return text({
+        ok: Boolean(selected),
+        checkedAt: new Date().toISOString(),
+        package: {
+            name: "lyth-mcp",
+            version: "0.1.0",
+            root: PACKAGE_ROOT,
+        },
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        submitEnabled: SUBMIT_ENABLED,
+        rpc: {
+            configured: CONFIGURED_RPCS,
+            selected: selected?.endpoint ?? null,
+            probes,
+        },
+        stores: {
+            wallet: await walletStoreInfo(),
+            addressbook: await addressbookInfo(),
+            outbox: await outboxInfo(),
+            receipts: await receiptInfo(),
+            vendorRegistry: VENDOR_REGISTRY_PATH,
+        },
+        guidance: [
+            SUBMIT_ENABLED
+                ? "Broadcasting is enabled; signed payloads can be submitted."
+                : "Broadcasting is disabled; signed payloads are stored in the outbox and can be retried after LYTH_MCP_ENABLE_SUBMIT=1.",
+            "Use explicit agent wallets only for capped operating budgets.",
+            "Use wallet handoff/passphrase approval for high-value funds.",
+        ],
     });
 });
 server.tool("wallet_funding_address", "Create or return a local testnet agent wallet address for funding. If missing, creates a local-machine encrypted wallet with capped low-value signing.", {
@@ -767,6 +866,328 @@ server.tool("wallet_list", "List local MCP wallets and low-value signing policy 
         store: await walletStoreInfo(),
         wallets: await listWallets(),
     });
+});
+server.tool("agent_wallet_create", "Create an explicit low-value agent operating wallet with user-approved purpose and caps.", {
+    name: z.string().min(1).describe("Local agent wallet name, e.g. pizza-agent."),
+    purpose: z.string().min(1).describe("What the agent wallet is allowed to be used for."),
+    confirm: z.literal("CREATE_AGENT_WALLET").describe("Required explicit confirmation."),
+    maxBalance: z.string().optional().describe("Recommended max balance to keep in the wallet."),
+    lowValueMaxAmount: z.string().optional().describe(`Max LYTH per local no-passphrase transaction. Default ${DEFAULT_LOW_VALUE_MAX}.`),
+    lowValueDailyLimit: z.string().optional().describe(`Daily LYTH cap. Default ${DEFAULT_LOW_VALUE_DAILY_LIMIT}.`),
+    allowedCounterparties: z.array(z.string()).optional().describe("Optional contact names or 0x addresses this wallet should prefer."),
+    allowedCategories: z.array(z.string()).optional().describe("Optional categories such as food, travel, legal."),
+    expiresAt: z.string().optional().describe("Optional ISO expiry for this operating wallet."),
+    fallbackApproval: z.enum(["passphrase", "wallet_handoff", "deny"]).optional().describe("What to do when a request exceeds limits."),
+    revealMnemonic: z.boolean().optional().describe("Return the generated mnemonic once. Default false."),
+    overwrite: z.boolean().optional(),
+}, async ({ name, purpose, maxBalance, lowValueMaxAmount, lowValueDailyLimit, allowedCounterparties, allowedCategories, expiresAt, fallbackApproval, revealMnemonic, overwrite }) => {
+    const wallet = await createWallet({
+        name,
+        revealMnemonic,
+        overwrite,
+        allowLocalKey: true,
+        lowValue: {
+            enabled: true,
+            maxAmount: lowValueMaxAmount ?? DEFAULT_LOW_VALUE_MAX,
+            dailyLimit: lowValueDailyLimit ?? DEFAULT_LOW_VALUE_DAILY_LIMIT,
+        },
+        agent: {
+            purpose,
+            network: NETWORK,
+            maxBalance,
+            allowedCounterparties,
+            allowedCategories,
+            expiresAt,
+            fallbackApproval: fallbackApproval ?? "wallet_handoff",
+            paused: false,
+        },
+    });
+    const receipt = await addReceipt({
+        kind: "agent_wallet_create",
+        status: "confirmed",
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        title: `Created agent wallet ${name}`,
+        summary: `${name} (${wallet.address}) for ${purpose}`,
+        walletName: name,
+        from: wallet.address,
+        result: compactWallet(wallet),
+    });
+    return text({
+        wallet: compactWallet(wallet),
+        fundingAddress: wallet.address,
+        receipt,
+        warning: "This is an explicitly authorized low-value agent hot wallet. Fund it only with the operating budget approved for this purpose.",
+    });
+});
+server.tool("agent_wallet_fund_request", "Draft a human-readable request to fund an agent wallet for a bounded task.", {
+    name: z.string().min(1),
+    amount: z.string().describe("Requested amount."),
+    asset: z.string().optional().describe("Asset symbol. Default LYTH."),
+    purpose: z.string().min(1),
+    expiresAt: z.string().optional(),
+}, async ({ name, amount, asset, purpose, expiresAt }) => {
+    const wallet = (await listWallets()).find((item) => item.name === name);
+    if (!wallet) {
+        return errorText(`wallet '${name}' not found`);
+    }
+    const draft = buildRunbookDraft({
+        runbook: "request_funds",
+        fields: {
+            agentAddress: wallet.address,
+            amount,
+            asset: asset ?? "LYTH",
+            purpose,
+            expiresAt,
+        },
+        policy: {
+            maxAmount: amount,
+            assetAllowlist: [asset ?? "LYTH"],
+            expiresAt,
+            requireHumanApproval: true,
+        },
+        agent: {
+            name,
+            address: wallet.address,
+            purpose: wallet.agent && typeof wallet.agent === "object" ? wallet.agent.purpose : undefined,
+        },
+    });
+    const receipt = await addReceipt({
+        kind: "agent_wallet_fund_request",
+        status: "drafted",
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        title: `Funding request for ${name}`,
+        summary: `Request ${amount} ${asset ?? "LYTH"} for ${purpose}`,
+        walletName: name,
+        to: wallet.address,
+        amount,
+        asset: asset ?? "LYTH",
+        result: draft,
+    });
+    return text({
+        wallet: compactWallet(wallet),
+        fundingAddress: wallet.address,
+        draft,
+        receipt,
+        message: `Send up to ${amount} ${asset ?? "LYTH"} to ${wallet.address} for: ${purpose}`,
+    });
+});
+server.tool("agent_wallet_limits", "Update explicit limits and metadata for an agent operating wallet.", {
+    name: z.string().min(1),
+    confirm: z.literal("UPDATE_AGENT_WALLET_LIMITS"),
+    lowValueMaxAmount: z.string().optional(),
+    lowValueDailyLimit: z.string().optional(),
+    maxBalance: z.string().optional(),
+    allowedCounterparties: z.array(z.string()).optional(),
+    allowedCategories: z.array(z.string()).optional(),
+    expiresAt: z.string().optional(),
+    fallbackApproval: z.enum(["passphrase", "wallet_handoff", "deny"]).optional(),
+}, async ({ name, lowValueMaxAmount, lowValueDailyLimit, maxBalance, allowedCounterparties, allowedCategories, expiresAt, fallbackApproval }) => {
+    let wallet = (await listWallets()).find((item) => item.name === name);
+    if (!wallet) {
+        return errorText(`wallet '${name}' not found`);
+    }
+    if (lowValueMaxAmount || lowValueDailyLimit) {
+        wallet = await configureLowValuePolicy({
+            name,
+            enabled: true,
+            maxAmount: lowValueMaxAmount ?? String(wallet.lowValue && typeof wallet.lowValue === "object" ? wallet.lowValue.maxAmount ?? DEFAULT_LOW_VALUE_MAX : DEFAULT_LOW_VALUE_MAX),
+            dailyLimit: lowValueDailyLimit ?? (wallet.lowValue && typeof wallet.lowValue === "object" ? wallet.lowValue.dailyLimit : undefined),
+        });
+    }
+    wallet = await updateAgentWalletMetadata({
+        name,
+        patch: {
+            maxBalance,
+            allowedCounterparties,
+            allowedCategories,
+            expiresAt,
+            fallbackApproval,
+            paused: false,
+        },
+    });
+    const receipt = await addReceipt({
+        kind: "agent_wallet_limits",
+        status: "confirmed",
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        title: `Updated agent wallet limits for ${name}`,
+        summary: `${name} limits updated`,
+        walletName: name,
+        result: compactWallet(wallet),
+    });
+    return text({ wallet: compactWallet(wallet), receipt });
+});
+server.tool("agent_wallet_pause", "Pause an agent wallet by disabling low-value local signing and marking the wallet paused.", {
+    name: z.string().min(1),
+    confirm: z.literal("PAUSE_AGENT_WALLET"),
+}, async ({ name }) => {
+    await configureLowValuePolicy({ name, enabled: false });
+    const wallet = await updateAgentWalletMetadata({ name, patch: { paused: true, fallbackApproval: "deny" } });
+    const receipt = await addReceipt({
+        kind: "agent_wallet_pause",
+        status: "confirmed",
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        title: `Paused agent wallet ${name}`,
+        summary: `${name} can no longer sign through low-value mode`,
+        walletName: name,
+        result: compactWallet(wallet),
+    });
+    return text({
+        wallet: compactWallet(wallet),
+        receipt,
+        warning: "Low-value signing is disabled. Existing signed payloads in the outbox are not automatically invalidated.",
+    });
+});
+server.tool("agent_wallet_drain", "Prepare and optionally sign a transfer that drains an agent wallet back to a principal or recovery address.", {
+    name: z.string().min(1),
+    to: z.string().describe("0x recipient address or exact addressbook contact name."),
+    amount: z.string().optional().describe("LYTH amount. Omit to drain balance minus estimated fee."),
+    passphrase: z.string().min(12).optional(),
+    sign: z.boolean().optional().describe("Sign encrypted envelope. Default true."),
+    broadcast: z.boolean().optional().describe("Broadcast signed envelope. Requires LYTH_MCP_ENABLE_SUBMIT=1."),
+    confirm: z.literal("DRAIN_AGENT_WALLET"),
+}, async ({ name, to, amount, passphrase, sign, broadcast }) => {
+    const recipient = await resolveRecipient(to);
+    if (!recipient) {
+        return errorText("to must be a 0x wire address or exact addressbook contact name");
+    }
+    const endpoint = await firstReachableEndpoint();
+    const wallet = (await listWallets()).find((item) => item.name === name);
+    if (!wallet) {
+        return errorText(`wallet '${name}' not found`);
+    }
+    const gasLimit = 21000n;
+    let fee = 1000000000n;
+    try {
+        fee = parseQuantity(await rpcCall(endpoint, "eth_gasPrice", []));
+    }
+    catch {
+        fee = 1000000000n;
+    }
+    const amountUnits = amount
+        ? decimalToUnits(amount)
+        : parseQuantity(await rpcCall(endpoint, "eth_getBalance", [wallet.address, "latest"])) - gasLimit * fee;
+    if (amountUnits <= 0n) {
+        return errorText("wallet balance is too low to drain after estimated fee");
+    }
+    const resolvedNonce = parseQuantity(await rpcCall(endpoint, "eth_getTransactionCount", [wallet.address, "latest"]));
+    const shouldSign = sign ?? true;
+    const encryptionKey = shouldSign
+        ? encryptionKeyFromRpc(await rpcCall(endpoint, "lyth_getEncryptionKey", []))
+        : undefined;
+    const amountDecimal = unitsToDecimal(amountUnits);
+    const built = await buildTransfer({
+        walletName: name,
+        to: recipient.address,
+        amountUnits,
+        chainId: CHAIN_ID,
+        nonce: resolvedNonce,
+        gasLimit,
+        maxFeePerGas: fee,
+        maxPriorityFeePerGas: fee,
+        passphrase,
+        encryptionKey,
+        sign: shouldSign,
+        allowLowValueSigning: false,
+        allowLocalKeySigning: true,
+    });
+    if (shouldSign && !built.signed) {
+        return errorText("drain signing requires a passphrase; low-value signing is disabled for drains");
+    }
+    const outboxEntry = built.signed
+        ? await addOutboxEntry({
+            network: NETWORK,
+            chainId: CHAIN_ID,
+            kind: "lyth_encrypted",
+            method: "lyth_submitEncrypted",
+            payloadHex: built.signed.encryptedEnvelopeHex,
+            walletName: name,
+            from: wallet.address,
+            to: recipient.address,
+            amount: amountDecimal,
+            asset: "LYTH",
+            nonce: toQuantity(resolvedNonce),
+            note: "Created by agent_wallet_drain.",
+        })
+        : null;
+    let submitted = null;
+    let broadcastError = null;
+    if (broadcast && built.signed) {
+        if (!SUBMIT_ENABLED) {
+            broadcastError = { endpoint, method: "lyth_submitEncrypted", message: "Broadcast disabled. Set LYTH_MCP_ENABLE_SUBMIT=1." };
+        }
+        else {
+            try {
+                const txHash = await submitPayload(endpoint, "lyth_encrypted", built.signed.encryptedEnvelopeHex);
+                submitted = { endpoint, method: "lyth_submitEncrypted", txHash };
+                if (outboxEntry) {
+                    await recordOutboxAttempt(outboxEntry.id, { at: new Date().toISOString(), endpoint, method: "lyth_submitEncrypted", ok: true, txHash });
+                }
+            }
+            catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                broadcastError = { endpoint, method: "lyth_submitEncrypted", message };
+                if (outboxEntry) {
+                    await recordOutboxAttempt(outboxEntry.id, { at: new Date().toISOString(), endpoint, method: "lyth_submitEncrypted", ok: false, error: message });
+                }
+            }
+        }
+    }
+    if (built.signed) {
+        await configureLowValuePolicy({ name, enabled: false });
+    }
+    const paused = await updateAgentWalletMetadata({ name, patch: { paused: true, fallbackApproval: "deny" } });
+    const receipt = await addReceipt({
+        kind: "agent_wallet_drain",
+        status: submitted ? "submitted" : broadcastError ? "failed" : built.signed ? "signed" : "drafted",
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        title: `Drain agent wallet ${name}`,
+        summary: `${name} -> ${recipient.address} (${amountDecimal} LYTH)`,
+        walletName: name,
+        from: wallet.address,
+        to: recipient.address,
+        amount: amountDecimal,
+        asset: "LYTH",
+        outboxId: outboxEntry?.id,
+        txHash: typeof submitted?.txHash === "string" ? submitted.txHash : undefined,
+        payloadHash: outboxEntry?.payloadHash,
+        endpoint,
+        result: { submitted, wallet: compactWallet(paused) },
+        error: broadcastError?.message,
+    });
+    return text({
+        endpoint,
+        recipient,
+        wallet: compactWallet(paused),
+        built,
+        outbox: outboxEntry,
+        submitted,
+        broadcastError,
+        receipt,
+        warning: "Drain disables low-value signing and marks the wallet paused. Existing signed payloads in the outbox may still be valid.",
+    });
+});
+server.tool("agent_wallet_delete", "Delete a local agent wallet record after explicit confirmation.", {
+    name: z.string().min(1),
+    confirmName: z.string().min(1).describe("Must exactly equal name."),
+    confirm: z.literal("DELETE_AGENT_WALLET"),
+}, async ({ name, confirmName }) => {
+    const result = await deleteWallet(name, confirmName);
+    const receipt = await addReceipt({
+        kind: "agent_wallet_delete",
+        status: "confirmed",
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        title: `Deleted agent wallet ${name}`,
+        summary: `${name} removed from local MCP wallet store`,
+        walletName: name,
+        result,
+    });
+    return text({ ...result, receipt });
 });
 server.tool("addressbook_add", "Add or update a local MCP addressbook contact. Use this before sending to named contacts.", {
     name: z.string().min(1),
@@ -883,43 +1304,115 @@ server.tool("wallet_build_transfer", "Build a native LYTH transfer from a stored
     if (shouldSign && !built.signed) {
         return errorText("sign=true but no passphrase was supplied and low-value signing is not configured for this wallet");
     }
+    const outboxEntry = built.signed
+        ? await addOutboxEntry({
+            network: NETWORK,
+            chainId: CHAIN_ID,
+            kind: "lyth_encrypted",
+            method: "lyth_submitEncrypted",
+            payloadHex: built.signed.encryptedEnvelopeHex,
+            walletName,
+            from: wallet.address,
+            to: recipient.address,
+            amount,
+            asset: "LYTH",
+            nonce: toQuantity(resolvedNonce),
+            policySnapshot: built.lowValuePolicy ?? wallet.lowValue,
+            note: "Created by wallet_build_transfer. Retry this payload from the outbox instead of rebuilding after transient broadcast failure.",
+        })
+        : null;
     let submitted = null;
     let broadcastError = null;
     if (broadcast) {
         if (!SUBMIT_ENABLED) {
-            return errorText("Broadcast disabled. Set LYTH_MCP_ENABLE_SUBMIT=1 to allow wallet_build_transfer broadcast.");
-        }
-        if (!built.signed) {
-            return errorText("Cannot broadcast unsigned transfer");
-        }
-        try {
-            submitted = {
-                endpoint,
-                method: "lyth_submitEncrypted",
-                txHash: await rpcCall(endpoint, "lyth_submitEncrypted", [built.signed.encryptedEnvelopeHex]),
-            };
-        }
-        catch (err) {
             broadcastError = {
                 endpoint,
                 method: "lyth_submitEncrypted",
-                message: err instanceof Error ? err.message : String(err),
+                message: "Broadcast disabled. Set LYTH_MCP_ENABLE_SUBMIT=1 to allow wallet_build_transfer broadcast.",
             };
         }
+        else if (!built.signed) {
+            broadcastError = {
+                endpoint,
+                method: "lyth_submitEncrypted",
+                message: "Cannot broadcast unsigned transfer",
+            };
+        }
+        else {
+            try {
+                const txHash = await submitPayload(endpoint, "lyth_encrypted", built.signed.encryptedEnvelopeHex);
+                submitted = {
+                    endpoint,
+                    method: "lyth_submitEncrypted",
+                    txHash,
+                };
+                if (outboxEntry) {
+                    await recordOutboxAttempt(outboxEntry.id, {
+                        at: new Date().toISOString(),
+                        endpoint,
+                        method: "lyth_submitEncrypted",
+                        ok: true,
+                        txHash,
+                    });
+                }
+            }
+            catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                broadcastError = {
+                    endpoint,
+                    method: "lyth_submitEncrypted",
+                    message,
+                };
+                if (outboxEntry) {
+                    await recordOutboxAttempt(outboxEntry.id, {
+                        at: new Date().toISOString(),
+                        endpoint,
+                        method: "lyth_submitEncrypted",
+                        ok: false,
+                        error: message,
+                    });
+                }
+            }
+        }
     }
+    const receipt = await addReceipt({
+        kind: "wallet_transfer",
+        status: submitted ? "submitted" : broadcastError ? "failed" : built.signed ? "signed" : "drafted",
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        title: `Transfer ${amount} LYTH to ${recipient.contact?.name ?? short(recipient.address)}`,
+        summary: `${walletName} -> ${recipient.address} (${amount} LYTH)`,
+        walletName,
+        from: wallet.address,
+        to: recipient.address,
+        amount,
+        asset: "LYTH",
+        outboxId: outboxEntry?.id,
+        txHash: typeof submitted?.txHash === "string" ? submitted.txHash : undefined,
+        payloadHash: outboxEntry?.payloadHash,
+        endpoint,
+        result: submitted ?? { signed: Boolean(built.signed), broadcastRequested: Boolean(broadcast) },
+        error: broadcastError?.message,
+    });
     return text({
         endpoint,
         recipient,
         built,
+        outbox: outboxEntry,
+        receipt,
         submitted,
         broadcastError,
         broadcastEnabled: SUBMIT_ENABLED,
         retry: built.signed
             ? {
-                tool: "submit_signed_transaction",
+                tool: outboxEntry ? "tx_outbox_retry" : "submit_signed_transaction",
                 arguments: {
-                    kind: "lyth_encrypted",
-                    payloadHex: built.signed.encryptedEnvelopeHex,
+                    ...(outboxEntry
+                        ? { id: outboxEntry.id }
+                        : {
+                            kind: "lyth_encrypted",
+                            payloadHex: built.signed.encryptedEnvelopeHex,
+                        }),
                 },
                 warning: "If broadcast failed, retry this exact signed payload. Do not call wallet_build_transfer again unless you intentionally want a new signed transfer and a new low-value allowance reservation.",
             }
@@ -1053,7 +1546,8 @@ server.tool("prepare_wallet_request", "Prepare a wallet approval payload from a 
 server.tool("submit_signed_transaction", "Broadcast an already-signed transaction/envelope. Disabled unless LYTH_MCP_ENABLE_SUBMIT=1. This tool never signs.", {
     kind: z.enum(["eth_raw", "lyth_encrypted"]).describe("eth_raw uses eth_sendRawTransaction; lyth_encrypted uses lyth_submitEncrypted."),
     payloadHex: z.string().describe("0x-prefixed signed raw transaction or encrypted envelope hex."),
-}, async ({ kind, payloadHex }) => {
+    outboxId: z.string().optional().describe("Optional local outbox id to update with the broadcast attempt."),
+}, async ({ kind, payloadHex, outboxId }) => {
     if (!isHex(payloadHex)) {
         return errorText("payloadHex must be 0x-prefixed hex");
     }
@@ -1062,11 +1556,197 @@ server.tool("submit_signed_transaction", "Broadcast an already-signed transactio
     }
     const endpoint = await firstReachableEndpoint();
     const method = kind === "eth_raw" ? "eth_sendRawTransaction" : "lyth_submitEncrypted";
-    return text({
-        endpoint,
-        method,
-        txHash: await rpcCall(endpoint, method, [payloadHex]),
-    });
+    try {
+        const txHash = await rpcCall(endpoint, method, [payloadHex]);
+        const outbox = outboxId
+            ? await recordOutboxAttempt(outboxId, { at: new Date().toISOString(), endpoint, method, ok: true, txHash })
+            : null;
+        const receipt = await addReceipt({
+            kind: "submit_signed_transaction",
+            status: "submitted",
+            network: NETWORK,
+            chainId: CHAIN_ID,
+            title: "Submitted signed transaction",
+            summary: `${method} -> ${txHash}`,
+            outboxId,
+            txHash,
+            endpoint,
+            result: { method, txHash },
+        });
+        return text({ endpoint, method, txHash, outbox, receipt });
+    }
+    catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const outbox = outboxId
+            ? await recordOutboxAttempt(outboxId, { at: new Date().toISOString(), endpoint, method, ok: false, error: message })
+            : null;
+        const receipt = await addReceipt({
+            kind: "submit_signed_transaction",
+            status: "failed",
+            network: NETWORK,
+            chainId: CHAIN_ID,
+            title: "Failed signed transaction submission",
+            summary: `${method} failed`,
+            outboxId,
+            endpoint,
+            error: message,
+        });
+        return text({ endpoint, method, outbox, receipt, error: message });
+    }
+});
+server.tool("tx_outbox_list", "List local signed payloads that can be retried without rebuilding/re-signing.", {
+    status: outboxStatusEnum.optional(),
+    walletName: z.string().optional(),
+    limit: z.number().min(1).max(100).optional(),
+}, async ({ status, walletName, limit }) => text({
+    store: await outboxInfo(),
+    entries: await listOutboxEntries({ status: status, walletName, limit }),
+}));
+server.tool("tx_outbox_get", "Get a local outbox entry by id.", { id: z.string().min(1) }, async ({ id }) => text(await getOutboxEntry(id)));
+server.tool("tx_outbox_retry", "Retry a signed payload from the local outbox. Requires LYTH_MCP_ENABLE_SUBMIT=1.", { id: z.string().min(1) }, async ({ id }) => {
+    const entry = await getOutboxEntry(id);
+    if (!SUBMIT_ENABLED) {
+        return errorText("Broadcast disabled. Set LYTH_MCP_ENABLE_SUBMIT=1 to retry outbox payloads.");
+    }
+    const endpoint = await firstReachableEndpoint();
+    const method = outboxMethod(entry.kind);
+    try {
+        const txHash = await submitPayload(endpoint, entry.kind, entry.payloadHex);
+        const outbox = await recordOutboxAttempt(id, { at: new Date().toISOString(), endpoint, method, ok: true, txHash });
+        const receipt = await addReceipt({
+            kind: "tx_outbox_retry",
+            status: "submitted",
+            network: NETWORK,
+            chainId: CHAIN_ID,
+            title: `Retried outbox ${id}`,
+            summary: `${method} -> ${txHash}`,
+            walletName: entry.walletName,
+            from: entry.from,
+            to: entry.to,
+            amount: entry.amount,
+            asset: entry.asset,
+            outboxId: id,
+            txHash,
+            payloadHash: entry.payloadHash,
+            endpoint,
+            result: { method, txHash },
+        });
+        return text({ endpoint, method, txHash, outbox, receipt });
+    }
+    catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const outbox = await recordOutboxAttempt(id, { at: new Date().toISOString(), endpoint, method, ok: false, error: message });
+        const receipt = await addReceipt({
+            kind: "tx_outbox_retry",
+            status: "failed",
+            network: NETWORK,
+            chainId: CHAIN_ID,
+            title: `Failed retry for outbox ${id}`,
+            summary: `${method} failed`,
+            walletName: entry.walletName,
+            from: entry.from,
+            to: entry.to,
+            amount: entry.amount,
+            asset: entry.asset,
+            outboxId: id,
+            payloadHash: entry.payloadHash,
+            endpoint,
+            error: message,
+        });
+        return text({ endpoint, method, outbox, receipt, error: message });
+    }
+});
+server.tool("tx_outbox_forget", "Remove a local outbox entry. This does not invalidate an already-signed payload.", {
+    id: z.string().min(1),
+    confirm: z.literal("FORGET_SIGNED_PAYLOAD"),
+}, async ({ id }) => text({
+    ...(await forgetOutboxEntry(id)),
+    warning: "Forgetting removes the local record only. It cannot invalidate a signed payload that was copied elsewhere.",
+}));
+server.tool("tx_status_summary", "Summarize live transaction status by tx hash or local outbox id.", {
+    txHash: z.string().optional(),
+    outboxId: z.string().optional(),
+}, async ({ txHash, outboxId }) => {
+    if (!txHash && !outboxId) {
+        return errorText("txHash or outboxId is required");
+    }
+    return text(await txStatusSummary({ txHash, outboxId }));
+});
+server.tool("receipt_list", "List local MCP receipts for drafted, signed, submitted, confirmed, or failed operations.", {
+    status: receiptStatusEnum.optional(),
+    kind: z.string().optional(),
+    walletName: z.string().optional(),
+    limit: z.number().min(1).max(100).optional(),
+}, async ({ status, kind, walletName, limit }) => text({
+    store: await receiptInfo(),
+    receipts: await listReceipts({ status: status, kind, walletName, limit }),
+}));
+server.tool("receipt_get", "Get one local MCP receipt by id.", { id: z.string().min(1) }, async ({ id }) => text(await getReceipt(id)));
+server.tool("receipt_export", "Export a local MCP receipt as JSON.", { id: z.string().min(1) }, async ({ id }) => text({
+    receipt: await getReceipt(id),
+    format: "json",
+}));
+server.tool("mcp_dashboard", "Render a compact Markdown dashboard for Claude Code or other text UIs.", {
+    includeEntries: z.boolean().optional().describe("Include recent outbox/receipt rows. Default true."),
+}, async ({ includeEntries }) => {
+    const wallets = await listWallets();
+    const outbox = await listOutboxEntries({ limit: 10 });
+    const receipts = await listReceipts({ limit: 10 });
+    const contacts = await listAddressbookContacts();
+    const walletInfo = await walletStoreInfo();
+    const contactInfo = await addressbookInfo();
+    const outboxStore = await outboxInfo();
+    const receiptStore = await receiptInfo();
+    const lines = [
+        "# Lyth MCP Dashboard",
+        "",
+        `Network: ${NETWORK} (${CHAIN_ID})`,
+        `Broadcast: ${SUBMIT_ENABLED ? "enabled" : "disabled"}`,
+        "",
+        mdTable(["Store", "Count", "Path"], [
+            ["Wallets", String(wallets.length), walletInfo.path],
+            ["Contacts", String(contacts.length), contactInfo.path],
+            ["Outbox", String(outboxStore.entryCount), outboxStore.path],
+            ["Receipts", String(receiptStore.receiptCount), receiptStore.path],
+        ]),
+        "",
+        "## Wallets",
+        wallets.length
+            ? mdTable(["Name", "Address", "Mode", "Cap", "Daily", "Paused", "Purpose"], wallets.map((wallet) => {
+                const low = wallet.lowValue;
+                const agent = wallet.agent;
+                return [
+                    wallet.name,
+                    short(wallet.address),
+                    wallet.keyProtection,
+                    low?.maxAmount ?? "",
+                    low?.dailyLimit ?? "",
+                    agent?.paused ? "yes" : "no",
+                    agent?.purpose ?? "",
+                ];
+            }))
+            : "No wallets.",
+    ];
+    if (includeEntries !== false) {
+        lines.push("", "## Outbox", outbox.length
+            ? mdTable(["ID", "Status", "Wallet", "To", "Amount", "Tx"], outbox.map((entry) => [
+                entry.id,
+                entry.status,
+                entry.walletName ?? "",
+                short(entry.to),
+                entry.amount ? `${entry.amount} ${entry.asset ?? ""}` : "",
+                short(entry.txHash),
+            ]))
+            : "No outbox entries.", "", "## Receipts", receipts.length
+            ? mdTable(["ID", "Status", "Kind", "Summary"], receipts.map((receipt) => [
+                receipt.id,
+                receipt.status,
+                receipt.kind,
+                receipt.summary,
+            ]))
+            : "No receipts.");
+    }
+    return { content: [{ type: "text", text: lines.join("\n") }] };
 });
 server.tool("vendor_search", "Search the local vendor registry used by agent runbooks. Set LYTH_MCP_VENDOR_REGISTRY to a JSON file.", {
     query: z.string().optional(),

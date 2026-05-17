@@ -41,7 +41,10 @@ Legend:
 - [x] Local encrypted PQM-1 / ML-DSA-65 wallet storage.
 - [x] Local-machine protected low-value testnet wallet flow.
 - [x] Native LYTH transfer builder and optional encrypted broadcast.
-- [x] Signed-payload retry guidance when broadcast fails.
+- [x] Signed-payload outbox and retry guidance when broadcast fails.
+- [x] Local receipts for drafted, signed, submitted, and failed MCP operations.
+- [x] Explicit low-value agent wallet tools with purpose, caps, pause, drain, delete, and funding request.
+- [x] MCP self-check and Markdown dashboard for text/TUI-style clients.
 - [x] Local addressbook with named-recipient transfer resolution.
 - [x] Demo vendor registry with pizza, flight, plumber, gift-card, and legal-review examples.
 - [x] Draft runbooks for payment, service booking, escrow, trade, policy, receipt, and vendor-rating flows.
@@ -65,7 +68,7 @@ The MCP may support explicitly authorized agent hot-wallet behavior for small sp
 
 Whitepaper refs: §10, §24.10, §27.6, §29.1.
 
-- [ ] **MCP** Add a local signed-transaction outbox.
+- [x] **MCP** Add a local signed-transaction outbox.
   - Tools: `tx_outbox_list`, `tx_outbox_get`, `tx_outbox_retry`, `tx_outbox_forget`.
   - Store signed payload, from, to, amount, nonce, route, created time, runbook hash, policy snapshot, and broadcast attempts.
   - Prevent repeated rebuild/re-sign loops after transient mempool or RPC failures.
@@ -91,14 +94,14 @@ Whitepaper refs: §10, §24.10, §27.6, §29.1.
   - Tools: `tx_watch`, `tx_status_summary`.
   - Poll `tx_lookup`, receipt, nonce, and account balance deltas.
   - Return `drafted`, `signed`, `submitted`, `pending`, `confirmed`, `failed`, `not_found`, `expired`.
-- [ ] **MCP** Add local receipts.
+- [x] **MCP** Add local receipts.
   - Persist every drafted/signed/submitted/confirmed/failed operation as JSON.
   - Include runbook id/hash, policy decision, signed payload hash, tx hash, receipt, and final status.
   - Tools: `receipt_list`, `receipt_get`, `receipt_export`.
 - [ ] **MCP** Add human-readable approval summaries.
   - "Send 0.1 LYTH from pizza-agent to Neo. Estimated fee X. Balance after Y. Policy cap remaining Z."
   - Show route risk for bridge/swap operations before signing.
-- [ ] **MCP** Add MCP self-check.
+- [x] **MCP** Add MCP self-check.
   - Tool: `mcp_self_check`.
   - Verify install version, SDK version, env config, writable stores, wallet file permissions, addressbook path, broadcast mode, node reachability.
 
@@ -125,13 +128,13 @@ Whitepaper refs: §10, §21.2.1, §24.10, §27.6, §28.5, §30.1.
   - Tool: `agent_create_subaccount`.
   - Link agent address to human deployer/principal.
   - Store principal, purpose, policy, and revocation metadata.
-- [ ] **MCP WALLET** Support explicit agent hot-wallet setup for small spending.
+- [x] **MCP WALLET** Support explicit agent hot-wallet setup for small spending.
   - Tools: `agent_wallet_create`, `agent_wallet_fund_request`, `agent_wallet_limits`, `agent_wallet_pause`, `agent_wallet_drain`, `agent_wallet_delete`.
   - Require user approval before creation.
   - Capture purpose, network, max balance, per-tx cap, daily/epoch cap, allowed counterparties/categories, expiry, and fallback approval mode.
   - Generate the agent wallet locally, encrypt the key, and present backup/recovery choices.
   - Mark these wallets as low-value operating wallets, not custody wallets.
-- [ ] **MCP WALLET** Add agent-wallet funding flow.
+- [x] **MCP WALLET** Add agent-wallet funding flow.
   - Agent can request funds: "Send up to X LYTH/USDC to this agent wallet for task Y; expires at Z."
   - Funding requires user approval from a principal wallet.
   - Agent cannot raise its own limits or refill itself without approval.

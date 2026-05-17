@@ -8,6 +8,7 @@ export interface WalletRecord {
     createdAt: string;
     encryptedMnemonic: EncryptedPayload;
     lowValue?: LowValuePolicy;
+    agent?: AgentWalletMetadata;
 }
 export interface WalletStore {
     schemaVersion: 1;
@@ -22,6 +23,17 @@ export interface LowValuePolicy {
     spentToday?: string;
     configuredAt: string;
     encryptedMnemonic: EncryptedPayload;
+}
+export interface AgentWalletMetadata {
+    purpose?: string;
+    network?: string;
+    maxBalance?: string;
+    allowedCounterparties?: string[];
+    allowedCategories?: string[];
+    expiresAt?: string;
+    fallbackApproval?: "passphrase" | "wallet_handoff" | "deny";
+    paused?: boolean;
+    updatedAt: string;
 }
 export interface EncryptedPayload {
     cipher: "aes-256-gcm";
@@ -45,6 +57,7 @@ export interface WalletSummary {
     keyProtection: "passphrase" | "local_machine_key";
     createdAt: string;
     lowValue?: Omit<LowValuePolicy, "encryptedMnemonic">;
+    agent?: AgentWalletMetadata;
 }
 export interface BuiltTransfer {
     wallet: WalletSummary;
@@ -64,7 +77,7 @@ export interface BuiltTransfer {
         }>;
     };
     signed?: {
-        mode: "passphrase" | "low_value";
+        mode: "passphrase" | "local_machine_key" | "low_value";
         signedInnerTxHex: string;
         innerSighashHex: string;
         innerWireBytes: number;
@@ -101,6 +114,7 @@ export declare function createWallet(args: {
         maxAmount: string;
         dailyLimit?: string;
     };
+    agent?: Omit<AgentWalletMetadata, "updatedAt">;
 }): Promise<WalletSummary & {
     mnemonic?: string;
     storePath: string;
@@ -116,6 +130,7 @@ export declare function importWallet(args: {
         maxAmount: string;
         dailyLimit?: string;
     };
+    agent?: Omit<AgentWalletMetadata, "updatedAt">;
 }): Promise<WalletSummary & {
     storePath: string;
 }>;
@@ -128,6 +143,10 @@ export declare function configureLowValuePolicy(args: {
     enabled: boolean;
     maxAmount?: string;
     dailyLimit?: string;
+}): Promise<WalletSummary>;
+export declare function updateAgentWalletMetadata(args: {
+    name: string;
+    patch: Partial<Omit<AgentWalletMetadata, "updatedAt">>;
 }): Promise<WalletSummary>;
 export declare function deleteWallet(name: string, confirmName: string): Promise<{
     deleted: boolean;
@@ -149,6 +168,7 @@ export declare function buildTransfer(args: {
     encryptionKey?: EncryptionKey;
     sign?: boolean;
     allowLowValueSigning?: boolean;
+    allowLocalKeySigning?: boolean;
 }): Promise<BuiltTransfer>;
 export declare function summarizeWallet(record: WalletRecord): WalletSummary;
 export declare function toQuantity(value: bigint): string;
@@ -157,3 +177,4 @@ export declare function encryptionKeyFromRpc(result: {
     epoch: number | string;
     encapsulationKey: string;
 }): EncryptionKey;
+export declare function unitsToDecimal(value: bigint, decimals?: number): string;

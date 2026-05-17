@@ -88,6 +88,12 @@ export async function createWallet(args) {
     if (args.lowValue?.enabled) {
         record.lowValue = await createLowValuePolicy(mnemonic, args.lowValue.maxAmount, args.lowValue.dailyLimit);
     }
+    if (args.agent) {
+        record.agent = {
+            ...args.agent,
+            updatedAt: new Date().toISOString(),
+        };
+    }
     const next = existing
         ? store.wallets.map((w) => (w.name === args.name ? record : w))
         : [...store.wallets, record];
@@ -118,6 +124,12 @@ export async function importWallet(args) {
     };
     if (args.lowValue?.enabled) {
         record.lowValue = await createLowValuePolicy(args.mnemonic, args.lowValue.maxAmount, args.lowValue.dailyLimit);
+    }
+    if (args.agent) {
+        record.agent = {
+            ...args.agent,
+            updatedAt: new Date().toISOString(),
+        };
     }
     const next = existing
         ? store.wallets.map((w) => (w.name === args.name ? record : w))
@@ -156,6 +168,22 @@ export async function configureLowValuePolicy(args) {
     }
     const mnemonic = decryptSecret(record.encryptedMnemonic, await resolveWalletKey(record, args.passphrase));
     record.lowValue = await createLowValuePolicy(mnemonic, args.maxAmount, args.dailyLimit);
+    await writeWalletStore(store);
+    return summarizeWallet(record);
+}
+export async function updateAgentWalletMetadata(args) {
+    const store = await readWalletStore();
+    const index = store.wallets.findIndex((w) => w.name === args.name);
+    if (index < 0) {
+        throw new Error(`wallet '${args.name}' not found`);
+    }
+    const record = store.wallets[index];
+    record.agent = {
+        ...(record.agent ?? {}),
+        ...args.patch,
+        updatedAt: new Date().toISOString(),
+    };
+    store.wallets[index] = record;
     await writeWalletStore(store);
     return summarizeWallet(record);
 }
@@ -217,6 +245,7 @@ export async function buildTransfer(args) {
             amountUnits: args.amountUnits,
             passphrase: args.passphrase,
             allowLowValueSigning: args.allowLowValueSigning ?? true,
+            allowLocalKeySigning: args.allowLocalKeySigning ?? false,
         });
     if (signer !== null) {
         if (!args.encryptionKey) {
@@ -266,6 +295,7 @@ export function summarizeWallet(record) {
                 configuredAt: record.lowValue.configuredAt,
             }
             : undefined,
+        agent: record.agent,
     };
 }
 export function toQuantity(value) {
@@ -338,6 +368,12 @@ async function resolveSigningBackend(args) {
         return {
             mode: "passphrase",
             backend: await unlockBackend(args.walletName, args.passphrase),
+        };
+    }
+    if (walletKeyProtection(record) === "local_machine_key" && args.allowLocalKeySigning) {
+        return {
+            mode: "local_machine_key",
+            backend: await unlockBackend(args.walletName),
         };
     }
     if (!args.allowLowValueSigning) {
@@ -434,7 +470,7 @@ function decimalToUnits(input, decimals = 18) {
     }
     return BigInt(whole + frac.padEnd(decimals, "0"));
 }
-function unitsToDecimal(value, decimals = 18) {
+export function unitsToDecimal(value, decimals = 18) {
     const sign = value < 0n ? "-" : "";
     const raw = (value < 0n ? -value : value).toString().padStart(decimals + 1, "0");
     const whole = raw.slice(0, -decimals);
