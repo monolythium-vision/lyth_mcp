@@ -168,6 +168,75 @@ export function operatorStatus(registry, operator) {
         ],
     };
 }
+export function monarchOperatorAssistant(registry, args = {}) {
+    const operator = args.operatorId ? getOperator(registry, args.operatorId) : undefined;
+    const clusters = args.clusterId
+        ? [getCluster(registry, args.clusterId)]
+        : listClusters(registry, {
+            region: args.region,
+            serviceType: args.serviceType,
+            status: args.includeDraft ? undefined : "active",
+            limit: args.limit ?? 10,
+        }).filter((cluster) => !operator || operator.clusterIds?.includes(cluster.id) || operator.openSeatInterest);
+    return {
+        scope: {
+            clusterId: args.clusterId,
+            operatorId: args.operatorId,
+            region: args.region,
+            serviceType: args.serviceType,
+            includeDraft: Boolean(args.includeDraft),
+        },
+        operator: operator ? operatorStatus(registry, operator) : undefined,
+        clusters: clusters.map((cluster) => monarchClusterReport(cluster)),
+        recommendations: monarchRecommendations(clusters, operator),
+        guardrails: [
+            "This assistant is for node/operator planning, not consumer wallet UX.",
+            "Do not expose validator maintenance, TPM/PCR, quorum, or service ROI controls inside payment/order flows.",
+            "TODO(mainnet): replace local metadata with live quorum, update, resource, and revenue telemetry from core/indexer.",
+        ],
+    };
+}
+export function monarchClusterReport(cluster) {
+    const reputation = clusterReputation(cluster);
+    const pressure = resourcePressure(cluster);
+    const roi = serviceRoi(cluster);
+    return {
+        clusterId: cluster.id,
+        displayName: cluster.displayName,
+        status: cluster.status,
+        health: {
+            level: reputation.level,
+            score: reputation.score,
+            uptime30d: cluster.reputation?.uptime30d,
+            missedRounds30d: cluster.reputation?.missedRounds30d,
+            slashingIncidents: cluster.reputation?.slashingIncidents ?? 0,
+            warnings: reputation.warnings,
+        },
+        quorum: {
+            configured: cluster.quorum ?? "unknown",
+            explanation: cluster.quorum === "7-of-10"
+                ? "Cluster is modeled as 10 operators with a 7-of-10 threshold; losing 4 operators can halt this cluster."
+                : "Quorum is local metadata only; verify live consensus configuration before operations.",
+            openSeats: cluster.operatorSeats?.open ?? 0,
+            totalSeats: cluster.operatorSeats?.total,
+        },
+        updateStatus: {
+            status: cluster.status,
+            safeForNewOps: cluster.status === "active",
+            note: cluster.status === "active"
+                ? "No local update/sunset warning is active."
+                : "Cluster is not marked active; avoid new service routing until live status clears.",
+            todo: "TODO(mainnet): attach live binary version, upgrade window, and operator rollout status.",
+        },
+        resourcePressure: pressure,
+        serviceRoi: roi,
+        operatorSeats: cluster.operatorSeats,
+        serviceTiers: cluster.serviceTiers,
+        foundation: clusterFoundationFlag(cluster),
+        sunset: clusterSunsetStatus(cluster),
+        nodeOpsOnly: true,
+    };
+}
 export function searchServices(registry, args) {
     return registry.clusters
         .filter((cluster) => !args.region || same(cluster.region, args.region))
@@ -187,6 +256,84 @@ export function searchServices(registry, args) {
     })))
         .sort((a, b) => serviceScore(b) - serviceScore(a))
         .slice(0, args.limit ?? 50);
+}
+function resourcePressure(cluster) {
+    const totalSeats = cluster.operatorSeats?.total ?? 0;
+    const openSeats = cluster.operatorSeats?.open ?? 0;
+    const filledSeats = Math.max(0, totalSeats - openSeats);
+    const seatPressure = totalSeats > 0 ? filledSeats / totalSeats : 0;
+    const activeServices = (cluster.serviceTiers ?? []).filter((service) => service.status === "active");
+    const degradedServices = (cluster.serviceTiers ?? []).filter((service) => service.status === "degraded" || service.status === "paused");
+    const gpuPressure = cluster.hardware?.gpu && activeServices.some((service) => service.type === "prover")
+        ? "gpu_capacity_should_be_monitored"
+        : "no_gpu_pressure_signal";
+    const level = degradedServices.length > 0 || cluster.status === "degraded"
+        ? "high"
+        : seatPressure >= 0.9
+            ? "medium"
+            : cluster.status !== "active"
+                ? "high"
+                : "low";
+    return {
+        level,
+        seatPressurePercent: Math.round(seatPressure * 100),
+        openSeats,
+        activeServiceCount: activeServices.length,
+        degradedServiceCount: degradedServices.length,
+        gpuPressure,
+        hardware: cluster.hardware,
+        warnings: [
+            ...(openSeats <= 1 && totalSeats > 0 ? ["Few open operator seats remain; onboarding flexibility is low."] : []),
+            ...(degradedServices.length ? [`${degradedServices.length} service tier(s) are degraded or paused.`] : []),
+            ...(cluster.status !== "active" ? [`Cluster status is ${cluster.status}.`] : []),
+        ],
+    };
+}
+function serviceRoi(cluster) {
+    return (cluster.serviceTiers ?? []).map((service) => {
+        const monthly = service.pricePerMonth ? Number(service.pricePerMonth) : undefined;
+        const perProof = service.pricePerProof ? Number(service.pricePerProof) : undefined;
+        const uptime = service.uptime30d ?? 0;
+        const proofLatency = service.proofLatencyMsP50;
+        const score = service.type === "prover"
+            ? Math.round((uptime / 2) + Math.max(0, 40 - (proofLatency ?? 2000) / 100) - (perProof ?? 0) * 10)
+            : Math.round((uptime / 2) + (monthly ? Math.max(0, 30 - monthly / 20) : 10));
+        return {
+            type: service.type,
+            status: service.status,
+            pricePerMonth: service.pricePerMonth,
+            pricePerProof: service.pricePerProof,
+            asset: service.asset,
+            uptime30d: service.uptime30d,
+            gpuClass: service.gpuClass,
+            capacity: service.capacity,
+            proofLatencyMsP50: service.proofLatencyMsP50,
+            roiScore: Math.max(0, score),
+            interpretation: service.type === "prover"
+                ? "Prover ROI favors high uptime, low proof latency, and lower per-proof fee."
+                : "Service ROI favors high uptime and lower monthly fee.",
+            todo: "TODO(mainnet): replace heuristic ROI with live utilization, rewards, operating cost, and SLA revenue data.",
+        };
+    }).sort((a, b) => b.roiScore - a.roiScore);
+}
+function monarchRecommendations(clusters, operator) {
+    const reports = clusters.map((cluster) => ({ cluster, reputation: clusterReputation(cluster), pressure: resourcePressure(cluster) }));
+    const bestHealth = [...reports].sort((a, b) => b.reputation.score - a.reputation.score)[0];
+    const openSeats = reports.filter((entry) => (entry.cluster.operatorSeats?.open ?? 0) > 0);
+    return [
+        bestHealth
+            ? `Best health candidate: ${bestHealth.cluster.displayName ?? bestHealth.cluster.id} (${bestHealth.reputation.score}).`
+            : "No cluster candidates matched the requested scope.",
+        openSeats.length
+            ? `Open-seat candidates: ${openSeats.map((entry) => entry.cluster.displayName ?? entry.cluster.id).join(", ")}.`
+            : "No open seats found in the requested scope.",
+        operator?.openSeatInterest
+            ? `${operator.displayName ?? operator.id} is marked interested in open seats.`
+            : operator
+                ? `${operator.displayName ?? operator.id} is not marked as actively seeking open seats.`
+                : "Pass operatorId to tailor onboarding and seat guidance.",
+        "Keep operational changes behind explicit operator workflows; do not mix them with consumer wallet/order flows.",
+    ];
 }
 function clusterScore(cluster) {
     const reputation = cluster.reputation?.score ?? 50;

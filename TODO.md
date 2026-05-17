@@ -381,9 +381,10 @@ Whitepaper refs: §14, §20, §23, §28, §30.5.
   - Route zkML/bridge proof requests to available prover services.
   - Show expected proof time, fee, and verifier status.
   - Implemented as `gpu_proof_market_assistant` over local service-tier metadata; live proof job queue/verifier registry remains TODO(core/indexer).
-- [ ] **MCP** Monarch operator assistant.
+- [x] **MCP** Monarch operator assistant.
   - Explain cluster health, 7-of-10 quorum, update status, open seats, resource pressure, service ROI.
   - Keep node-ops separate from consumer wallet UX.
+  - Implemented as `monarch_operator_assistant` over local cluster/operator/service metadata; live ops telemetry remains TODO(core/indexer).
 
 ## P10: Security, Emergency, And Threat-Model Tools
 

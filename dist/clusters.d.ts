@@ -186,6 +186,194 @@ export declare function operatorStatus(registry: ClusterRegistry, operator: Oper
     warnings: string[];
     assumptions: string[];
 };
+export declare function monarchOperatorAssistant(registry: ClusterRegistry, args?: {
+    clusterId?: string;
+    operatorId?: string;
+    region?: string;
+    serviceType?: ClusterServiceType;
+    includeDraft?: boolean;
+    limit?: number;
+}): {
+    scope: {
+        clusterId: string | undefined;
+        operatorId: string | undefined;
+        region: string | undefined;
+        serviceType: ClusterServiceType | undefined;
+        includeDraft: boolean;
+    };
+    operator: {
+        operator: OperatorRecord;
+        clusters: ClusterRecord[];
+        openSeats: number;
+        attestation: {
+            status?: "verified" | "draft" | "missing" | "expired";
+            method?: string;
+            notes?: string;
+        } | undefined;
+        warnings: string[];
+        assumptions: string[];
+    } | undefined;
+    clusters: {
+        clusterId: string;
+        displayName: string | undefined;
+        status: ClusterStatus;
+        health: {
+            level: string;
+            score: number;
+            uptime30d: number | undefined;
+            missedRounds30d: number | undefined;
+            slashingIncidents: number;
+            warnings: string[];
+        };
+        quorum: {
+            configured: string;
+            explanation: string;
+            openSeats: number;
+            totalSeats: number | undefined;
+        };
+        updateStatus: {
+            status: ClusterStatus;
+            safeForNewOps: boolean;
+            note: string;
+            todo: string;
+        };
+        resourcePressure: {
+            level: string;
+            seatPressurePercent: number;
+            openSeats: number;
+            activeServiceCount: number;
+            degradedServiceCount: number;
+            gpuPressure: string;
+            hardware: {
+                cpuClass?: string;
+                ramGb?: number;
+                storageTb?: number;
+                gpu?: boolean;
+                gpuClass?: string;
+            } | undefined;
+            warnings: string[];
+        };
+        serviceRoi: {
+            type: ClusterServiceType;
+            status: "active" | "draft" | "degraded" | "paused";
+            pricePerMonth: string | undefined;
+            pricePerProof: string | undefined;
+            asset: string | undefined;
+            uptime30d: number | undefined;
+            gpuClass: string | undefined;
+            capacity: string | undefined;
+            proofLatencyMsP50: number | undefined;
+            roiScore: number;
+            interpretation: string;
+            todo: string;
+        }[];
+        operatorSeats: {
+            total?: number;
+            open?: number;
+        } | undefined;
+        serviceTiers: ClusterServiceTier[] | undefined;
+        foundation: {
+            clusterId: string;
+            foundationControlled: boolean;
+            explanation: string;
+            stakingGuidance: string;
+        };
+        sunset: {
+            clusterId: string;
+            status: ClusterStatus;
+            planned: boolean;
+            sunset: {
+                planned?: boolean;
+                at?: string;
+                reason?: string;
+                replacementClusterId?: string;
+            } | undefined;
+            warning: string | undefined;
+        };
+        nodeOpsOnly: boolean;
+    }[];
+    recommendations: string[];
+    guardrails: string[];
+};
+export declare function monarchClusterReport(cluster: ClusterRecord): {
+    clusterId: string;
+    displayName: string | undefined;
+    status: ClusterStatus;
+    health: {
+        level: string;
+        score: number;
+        uptime30d: number | undefined;
+        missedRounds30d: number | undefined;
+        slashingIncidents: number;
+        warnings: string[];
+    };
+    quorum: {
+        configured: string;
+        explanation: string;
+        openSeats: number;
+        totalSeats: number | undefined;
+    };
+    updateStatus: {
+        status: ClusterStatus;
+        safeForNewOps: boolean;
+        note: string;
+        todo: string;
+    };
+    resourcePressure: {
+        level: string;
+        seatPressurePercent: number;
+        openSeats: number;
+        activeServiceCount: number;
+        degradedServiceCount: number;
+        gpuPressure: string;
+        hardware: {
+            cpuClass?: string;
+            ramGb?: number;
+            storageTb?: number;
+            gpu?: boolean;
+            gpuClass?: string;
+        } | undefined;
+        warnings: string[];
+    };
+    serviceRoi: {
+        type: ClusterServiceType;
+        status: "active" | "draft" | "degraded" | "paused";
+        pricePerMonth: string | undefined;
+        pricePerProof: string | undefined;
+        asset: string | undefined;
+        uptime30d: number | undefined;
+        gpuClass: string | undefined;
+        capacity: string | undefined;
+        proofLatencyMsP50: number | undefined;
+        roiScore: number;
+        interpretation: string;
+        todo: string;
+    }[];
+    operatorSeats: {
+        total?: number;
+        open?: number;
+    } | undefined;
+    serviceTiers: ClusterServiceTier[] | undefined;
+    foundation: {
+        clusterId: string;
+        foundationControlled: boolean;
+        explanation: string;
+        stakingGuidance: string;
+    };
+    sunset: {
+        clusterId: string;
+        status: ClusterStatus;
+        planned: boolean;
+        sunset: {
+            planned?: boolean;
+            at?: string;
+            reason?: string;
+            replacementClusterId?: string;
+        } | undefined;
+        warning: string | undefined;
+    };
+    nodeOpsOnly: boolean;
+};
 export declare function searchServices(registry: ClusterRegistry, args: {
     serviceType: ClusterServiceType;
     region?: string;

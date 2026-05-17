@@ -165,10 +165,13 @@ const euProvers = clusters.searchServices(clusterRegistry.registry, { serviceTyp
 const foundationClusters = clusters.listClusters(clusterRegistry.registry, { foundationControlled: true });
 const decentralizationClusters = clusters.listClusters(clusterRegistry.registry, { foundationControlled: false, minOpenSeats: 1 });
 const operator = clusters.getOperator(clusterRegistry.registry, "atlas-provers");
+const monarch = clusters.monarchOperatorAssistant(clusterRegistry.registry, { operatorId: "atlas-provers", serviceType: "prover" });
 assert(euProvers.some((entry) => entry.clusterId === "mono-nl-community-1"), "expected EU prover service search to include NL community cluster");
 assert(foundationClusters.some((cluster) => cluster.id === "mono-eu-1"), "expected foundation cluster flag search");
 assert(decentralizationClusters[0].id === "mono-nl-community-1", "expected NL community cluster to lead decentralization candidates");
 assert(clusters.operatorStatus(clusterRegistry.registry, operator).openSeats > 0, "expected atlas-provers to have open-seat exposure");
+assert(monarch.clusters.some((entry) => entry.quorum.configured === "7-of-10"), "expected monarch assistant quorum explanation");
+assert(monarch.guardrails.some((entry) => entry.includes("node/operator")), "expected monarch assistant node-ops guardrail");
 
 const runbookList = await runbooks.listCanonicalRunbooks("./runbooks");
 assert(runbookList.length >= 9, "expected bundled canonical runbooks");
@@ -187,5 +190,6 @@ console.log(JSON.stringify({
   explainedError: mempoolError.classification,
   clusters: clusterRegistry.registry.clusters.length,
   euProvers: euProvers.length,
+  monarchClusters: monarch.clusters.length,
   runbooks: runbookList.length,
 }, null, 2));

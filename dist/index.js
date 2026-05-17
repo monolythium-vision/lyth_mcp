@@ -26,7 +26,7 @@ import { createOrder, getOrder, listOrders, orderStoreInfo, updateOrder, } from 
 import { bookingStoreInfo, createBooking, getBooking, listBookings, updateBooking, } from "./bookings.js";
 import { createInvoice, getInvoice, invoiceStoreInfo, listInvoices, updateInvoice, } from "./invoices.js";
 import { explainError } from "./error_explain.js";
-import { clusterFoundationFlag, clusterRegistrySummary, clusterReputation, clusterSunsetStatus, getCluster, getOperator, listClusters, listOperators, loadClusterRegistry, operatorStatus, searchServices, } from "./clusters.js";
+import { clusterFoundationFlag, clusterRegistrySummary, clusterReputation, clusterSunsetStatus, getCluster, getOperator, listClusters, listOperators, loadClusterRegistry, monarchOperatorAssistant, operatorStatus, searchServices, } from "./clusters.js";
 import { evaluateMerchantPolicy, getMerchantPolicy, listMerchantPolicies, merchantPolicyStoreInfo, removeMerchantPolicy, upsertMerchantPolicy, } from "./merchant_policy.js";
 import { diffRunbookContent, getCanonicalRunbook, listCanonicalRunbooks, } from "./runbooks.js";
 import { renderRisk } from "./risk_renderer.js";
@@ -2308,7 +2308,7 @@ server.tool("ask_chain", "Route a natural-language blockchain question to a type
             result: explainError({ errorMessage: question, tool: "ask_chain" }),
         });
     }
-    if (/(status|health|sync|mempool|rpc health|rpc status)/i.test(question) && !/(cluster|operator|validator|prover|gpu|proof|zkml|foundation|decentralization|decentralisation|stake|staking)/i.test(question)) {
+    if (/(status|health|sync|mempool|rpc health|rpc status)/i.test(question) && !/(cluster|operator|validator|prover|gpu|proof|zkml|foundation|decentralization|decentralisation|stake|staking|monarch|quorum|service roi|resource pressure)/i.test(question)) {
         const endpoint = await firstReachableEndpoint();
         const [stats, round, mempool, indexer, sync] = await Promise.allSettled([
             rpcCall(endpoint, "lyth_chainStats"),
@@ -2333,7 +2333,7 @@ server.tool("ask_chain", "Route a natural-language blockchain question to a type
             },
         });
     }
-    if (/(cluster|operator|validator|prover|gpu|proof|zkml|foundation|decentralization|decentralisation|stake|staking|archive service|oracle service)/i.test(question)) {
+    if (/(cluster|operator|validator|prover|gpu|proof|zkml|foundation|decentralization|decentralisation|stake|staking|monarch|quorum|service roi|resource pressure|archive service|oracle service)/i.test(question)) {
         const registry = await loadClusters();
         const region = /\beu\b|europe/i.test(question)
             ? "EU"
@@ -2381,6 +2381,7 @@ server.tool("ask_chain", "Route a natural-language blockchain question to a type
                 limit: limit ?? 10,
             })
             : undefined;
+        const wantsMonarch = /monarch|quorum|service roi|resource pressure|operator assistant|cluster health/i.test(question);
         const clusters = listClusters(registry.registry, {
             region,
             serviceType,
@@ -2393,11 +2394,14 @@ server.tool("ask_chain", "Route a natural-language blockchain question to a type
         return asText({
             question,
             intent: serviceType ? `${serviceType}_service_search` : "cluster_search",
-            typedTool: proofType ? "gpu_proof_market_assistant" : serviceType === "prover" ? "prover_service_search" : serviceType ? `${serviceType}_service_search` : "cluster_search",
+            typedTool: wantsMonarch ? "monarch_operator_assistant" : proofType ? "gpu_proof_market_assistant" : serviceType === "prover" ? "prover_service_search" : serviceType ? `${serviceType}_service_search` : "cluster_search",
             sources: [{ type: "local_registry", path: CLUSTER_REGISTRY_PATH, hash: registry.contentHash }],
             result: {
                 registry: clusterRegistrySummary(registry),
                 proofType,
+                monarch: wantsMonarch
+                    ? monarchOperatorAssistant(registry.registry, { region, serviceType, limit: limit ?? 10 })
+                    : undefined,
                 services: serviceResults,
                 clusters: clusters.map((cluster) => ({
                     ...cluster,
@@ -3523,6 +3527,28 @@ server.tool("operator_open_seats", "List clusters/operators with open operator s
             reputation: clusterReputation(cluster),
         })),
         warning: "Open seats are local metadata. TODO(mainnet): use live operator registry and application flow.",
+    });
+});
+server.tool("monarch_operator_assistant", "Explain cluster health, 7-of-10 quorum, update status, open seats, resource pressure, and service ROI for node operators.", {
+    clusterId: z.string().optional(),
+    operatorId: z.string().optional(),
+    region: z.string().optional(),
+    serviceType: clusterServiceTypeEnum.optional(),
+    includeDraft: z.boolean().optional(),
+    limit: z.number().min(1).max(100).optional(),
+}, async ({ clusterId, operatorId, region, serviceType, includeDraft, limit }) => {
+    const registry = await loadClusters();
+    return text({
+        registry: clusterRegistrySummary(registry),
+        assistant: monarchOperatorAssistant(registry.registry, {
+            clusterId,
+            operatorId,
+            region,
+            serviceType: serviceType,
+            includeDraft,
+            limit,
+        }),
+        warning: "Node-ops guidance only. This tool must not be used as a consumer wallet/payment flow.",
     });
 });
 async function serviceSearchResponse(serviceType, args) {

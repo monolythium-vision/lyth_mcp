@@ -234,6 +234,7 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `operator_search` | Search local operators by region, cluster, foundation control, and open-seat interest |
 | `operator_get` | Get one operator's clusters, reputation, open seats, and attestation status |
 | `operator_open_seats` | List clusters/operators with open operator seats |
+| `monarch_operator_assistant` | Explain cluster health, quorum, resource pressure, open seats, and service ROI |
 | `rpc_service_search` | Search local RPC service tiers |
 | `archive_service_search` | Search local archive service tiers |
 | `prover_service_search` | Search local GPU prover service tiers |
@@ -406,7 +407,9 @@ The local registry lets an assistant answer:
 - which clusters are better candidates for max-decentralization delegation;
 - which operators have draft reputation, cluster membership, and attestation status.
 
-Use `cluster_search`, `cluster_reputation`, `cluster_foundation_flag`, and `cluster_sunset_status` for delegation explanations. Use `prover_service_search`, `rpc_service_search`, `archive_service_search`, and `oracle_service_search` for service-tier routing. Use `gpu_proof_market_assistant` when an assistant needs to route a bridge, zkML, or generic proof request to a prover service with fee/latency assumptions. `ask_chain` routes questions such as "Show EU clusters with GPU prover service" and "Which clusters maximize decentralization for my stake?" into these typed tools and returns the local registry hash it used.
+Use `cluster_search`, `cluster_reputation`, `cluster_foundation_flag`, and `cluster_sunset_status` for delegation explanations. Use `monarch_operator_assistant` for node-operator planning: cluster health, 7-of-10 quorum, update status, open seats, resource pressure, and service ROI. It is intentionally node-ops only and should not be mixed into consumer wallet/payment flows.
+
+Use `prover_service_search`, `rpc_service_search`, `archive_service_search`, and `oracle_service_search` for service-tier routing. Use `gpu_proof_market_assistant` when an assistant needs to route a bridge, zkML, or generic proof request to a prover service with fee/latency assumptions. `ask_chain` routes questions such as "Show EU clusters with GPU prover service" and "Which clusters maximize decentralization for my stake?" into these typed tools and returns the local registry hash it used.
 
 Every cluster/operator response includes TODO(mainnet) assumptions. Production needs signed cluster metadata, live quorum/uptime/slashing feeds, TPM/PCR attestation, service-capacity feeds, and delegation cap checks from core/indexer.
 
