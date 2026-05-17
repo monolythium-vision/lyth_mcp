@@ -46,6 +46,7 @@ Legend:
 - [x] Explicit low-value agent wallet tools with purpose, caps, pause, drain, delete, and funding request.
 - [x] MCP self-check and Markdown dashboard for text/TUI-style clients.
 - [x] Transfer preflight, RPC health scoring, tx watcher, and bucketed low-value accounting.
+- [x] Low-value reservation expiry/manual release and approval summary rendering.
 - [x] Local addressbook with named-recipient transfer resolution.
 - [x] Demo vendor registry with pizza, flight, plumber, gift-card, and legal-review examples.
 - [x] Draft runbooks for payment, service booking, escrow, trade, policy, receipt, and vendor-rating flows.
@@ -76,7 +77,7 @@ Whitepaper refs: §10, §24.10, §27.6, §29.1.
 - [x] **MCP** Split low-value accounting into `reserved`, `submitted`, `confirmed`, `failed`, and `expired`.
   - Keep the conservative rule that signed payloads reserve allowance.
   - Track allowance per agent wallet, not just globally.
-- [ ] **MCP** Add low-value reservation expiry and manual release.
+- [x] **MCP** Add low-value reservation expiry and manual release.
   - Add expiry/garbage-collection for old unsubmitted payloads.
   - Add a manual user-approved release flow for stale reservations.
 - [x] **MCP** Add preflight checks before signing.
@@ -100,7 +101,7 @@ Whitepaper refs: §10, §24.10, §27.6, §29.1.
   - Persist every drafted/signed/submitted/confirmed/failed operation as JSON.
   - Include runbook id/hash, policy decision, signed payload hash, tx hash, receipt, and final status.
   - Tools: `receipt_list`, `receipt_get`, `receipt_export`.
-- [ ] **MCP** Add human-readable approval summaries.
+- [x] **MCP** Add human-readable approval summaries.
   - "Send 0.1 LYTH from pizza-agent to Neo. Estimated fee X. Balance after Y. Policy cap remaining Z."
   - Show route risk for bridge/swap operations before signing.
 - [x] **MCP** Add MCP self-check.

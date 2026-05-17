@@ -156,6 +156,7 @@ examples/claude_desktop_config.json
 | `LYTH_MCP_WALLET_PASSPHRASE` | unset | Optional env passphrase for unattended passphrase signing; safer to pass per call |
 | `LYTH_MCP_DEFAULT_LOW_VALUE_MAX` | `10` | Default LYTH per-transaction cap for passphrase-less wallets |
 | `LYTH_MCP_DEFAULT_LOW_VALUE_DAILY_LIMIT` | `50` | Default LYTH daily cap for passphrase-less wallets |
+| `LYTH_MCP_OUTBOX_EXPIRY_HOURS` | `24` | Local signed-payload reservation expiry window |
 
 Use `LYTH_RPC_URLS` when you want the MCP to probe your own RPC fleet:
 
@@ -196,6 +197,8 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `tx_outbox_get` | Inspect one local signed payload |
 | `tx_outbox_retry` | Retry a signed payload without rebuilding/re-signing |
 | `tx_outbox_forget` | Remove a local outbox entry without invalidating the signed payload |
+| `tx_outbox_release` | Release a local low-value allowance reservation for one signed/not-submitted payload |
+| `tx_outbox_expire_stale` | List or release locally expired low-value outbox reservations |
 | `receipt_list` | List local MCP operation receipts |
 | `receipt_get` | Inspect one local MCP receipt |
 | `receipt_export` | Export one receipt as JSON |
@@ -210,6 +213,7 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `wallet_list` | List local wallets and low-value policy status |
 | `wallet_low_value_accounting` | Show reserved/submitted/confirmed/failed/expired low-value buckets |
 | `wallet_preflight_transfer` | Check chain id, balance, nonce, RPC health, encryption key, and policy before signing |
+| `wallet_approval_summary` | Render the human-readable approval text for a planned transfer |
 | `agent_wallet_create` | Create an explicit low-value agent operating wallet with purpose and caps |
 | `agent_wallet_fund_request` | Draft a funding request for an agent wallet |
 | `agent_wallet_limits` | Update an agent wallet's local caps and metadata |
@@ -340,6 +344,8 @@ Named contacts can be stored in the local addressbook and then used directly as 
 
 Amounts above the low-value cap are blocked unless the wallet was passphrase-protected and the passphrase is supplied. Low-value accounting is reserved when the MCP creates a signed payload, not when final settlement is observed, because a signed payload can be submitted later. Broadcast acceptance moves the amount from `reserved` to `submitted`; `tx_status_summary` or `tx_watch` moves it to `confirmed` or `failed` once a receipt is observed. If broadcast fails, retry the returned outbox entry; do not rebuild the transfer unless you intentionally want a new signed payload and a new low-value reservation.
 
+Signed payloads receive a local expiry timestamp, default 24 hours. Expiry only releases the MCP allowance reservation; it cannot invalidate a signed payload that was copied elsewhere. Use `tx_outbox_expire_stale` to list expired candidates, then call it with `release=true` and `confirm: "EXPIRE_STALE_RESERVATIONS"` to move eligible reservations to the `expired` bucket. Use `tx_outbox_release` for one entry.
+
 Signed payloads are now also written to the local outbox. Prefer retrying with `tx_outbox_retry`:
 
 ```json
@@ -363,6 +369,16 @@ Before signing a payment, the MCP now runs transfer preflight checks. You can ca
 ```
 
 Use `rpc_health` to see which RPC endpoint will be preferred for writes.
+
+For display-only approval text without signing, call:
+
+```json
+{
+  "walletName": "pizza-agent",
+  "to": "Neo",
+  "amount": "0.1"
+}
+```
 
 ## Example: Pizza Payment Runbook
 

@@ -42,6 +42,7 @@ const MAX_OUTPUT = Number(process.env.LYTH_MCP_MAX_OUTPUT ?? 16_000);
 const SUBMIT_ENABLED = process.env.LYTH_MCP_ENABLE_SUBMIT === "1";
 const DEFAULT_LOW_VALUE_MAX = process.env.LYTH_MCP_DEFAULT_LOW_VALUE_MAX ?? "10";
 const DEFAULT_LOW_VALUE_DAILY_LIMIT = process.env.LYTH_MCP_DEFAULT_LOW_VALUE_DAILY_LIMIT ?? "50";
+const DEFAULT_OUTBOX_EXPIRY_HOURS = Number(process.env.LYTH_MCP_OUTBOX_EXPIRY_HOURS ?? 24);
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_VENDOR_REGISTRY_PATH = resolve(PACKAGE_ROOT, "vendors.example.json");
 const VENDOR_REGISTRY_PATH = process.env.LYTH_MCP_VENDOR_REGISTRY || DEFAULT_VENDOR_REGISTRY_PATH;
@@ -722,6 +723,85 @@ function short(value, left = 6, right = 4) {
     }
     return value.length <= left + right + 3 ? value : `${value.slice(0, left)}...${value.slice(-right)}`;
 }
+function defaultOutboxExpiresAt() {
+    return new Date(Date.now() + DEFAULT_OUTBOX_EXPIRY_HOURS * 60 * 60 * 1000).toISOString();
+}
+function isPast(value) {
+    return Boolean(value && Date.parse(value) <= Date.now());
+}
+async function releaseLowValueReservation(args) {
+    const entry = await getOutboxEntry(args.outboxId);
+    if (!entry.lowValueReserved) {
+        return {
+            entry,
+            released: false,
+            reason: "Outbox entry did not reserve low-value allowance.",
+        };
+    }
+    if (!entry.walletName || !entry.amount) {
+        return {
+            entry,
+            released: false,
+            reason: "Outbox entry is missing walletName or amount.",
+        };
+    }
+    if (entry.status !== "signed") {
+        return {
+            entry,
+            released: false,
+            reason: `Only signed/not-submitted entries can be released safely; current status is ${entry.status}.`,
+        };
+    }
+    const accounting = await moveLowValueAccounting({
+        walletName: entry.walletName,
+        amount: entry.amount,
+        from: "reserved",
+        to: args.to,
+    });
+    const updated = await updateOutboxStatus(args.outboxId, args.to === "expired" ? "expired" : "failed");
+    const receipt = await addReceipt({
+        kind: "low_value_reservation_release",
+        status: args.to === "expired" ? "confirmed" : "failed",
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        title: `Released low-value reservation ${args.outboxId}`,
+        summary: `${entry.walletName} ${entry.amount} ${entry.asset ?? "LYTH"} moved from reserved to ${args.to}`,
+        walletName: entry.walletName,
+        from: entry.from,
+        to: entry.to,
+        amount: entry.amount,
+        asset: entry.asset,
+        outboxId: args.outboxId,
+        payloadHash: entry.payloadHash,
+        result: { accounting, updated },
+    });
+    return {
+        entry: updated,
+        released: true,
+        accounting,
+        receipt,
+        warning: "This releases the local MCP allowance reservation only. It cannot invalidate a signed payload copied elsewhere.",
+    };
+}
+function approvalSummary(args) {
+    const target = args.recipientLabel ? `${args.recipientLabel} (${args.to})` : args.to;
+    return {
+        title: `Send ${args.amount} ${args.asset} from ${args.walletName} to ${target}`,
+        lines: [
+            `Action: send ${args.amount} ${args.asset}`,
+            `From: ${args.walletName} (${args.from})`,
+            `To: ${target}`,
+            args.feeCeiling ? `Fee ceiling: ${args.feeCeiling} ${args.asset}` : null,
+            args.remainingAfterCeiling ? `Balance after fee ceiling: ${args.remainingAfterCeiling} ${args.asset}` : null,
+            args.lowValueRemaining ? `Low-value cap remaining after reservation: ${args.lowValueRemaining} ${args.asset}` : null,
+            `Preflight: ${args.preflightOk ? "pass" : "fail"}`,
+            args.violations.length ? `Violations: ${args.violations.join("; ")}` : null,
+            args.warnings.length ? `Warnings: ${args.warnings.join("; ")}` : null,
+        ].filter((line) => line !== null),
+        approvalRequired: true,
+        risk: "Review recipient, amount, fee ceiling, and cap impact before signing. Low-value mode is a capped hot-wallet mode.",
+    };
+}
 async function txStatusSummary(args) {
     const outbox = args.outboxId ? await getOutboxEntry(args.outboxId) : null;
     const txHash = args.txHash ?? outbox?.txHash;
@@ -1145,7 +1225,81 @@ server.tool("wallet_preflight_transfer", "Run transfer safety checks before sign
         allowLowValueSigning: shouldSign ? allowLowValueSigning ?? true : false,
         passphrase,
     });
-    return preflight.ok ? text({ recipient, preflight }) : errorJson({ recipient, preflight });
+    const balance = preflight.checks.balance;
+    const lowValue = preflight.checks.wallet?.lowValue;
+    const summary = approvalSummary({
+        walletName,
+        from: wallet.address,
+        to: recipient.address,
+        recipientLabel: recipient.contact?.name,
+        amount,
+        asset: "LYTH",
+        feeCeiling: balance?.estimatedFeeCeiling,
+        remainingAfterCeiling: balance?.remainingAfterCeiling,
+        lowValueRemaining: lowValue?.accounting?.remainingToday,
+        preflightOk: preflight.ok,
+        violations: preflight.violations,
+        warnings: preflight.warnings,
+    });
+    return preflight.ok ? text({ recipient, summary, preflight }) : errorJson({ recipient, summary, preflight });
+});
+server.tool("wallet_approval_summary", "Render a human-readable approval summary for a planned LYTH transfer without signing.", {
+    walletName: z.string().min(1),
+    to: z.string().describe("0x recipient address or exact addressbook contact name."),
+    amount: z.string().describe("LYTH amount, e.g. 1.5."),
+    gasLimit: z.string().optional().describe("Hex or decimal gas limit. Default 21000."),
+    maxFeePerGas: z.string().optional().describe("Hex or decimal fee. Defaults to eth_gasPrice or 1 gwei fallback."),
+}, async ({ walletName, to, amount, gasLimit, maxFeePerGas }) => {
+    const recipient = await resolveRecipient(to);
+    if (!recipient) {
+        return errorJson({ ok: false, violations: ["to must be a 0x wire address or exact addressbook contact name"] });
+    }
+    const endpoint = await firstReachableEndpoint();
+    const wallet = (await listWallets()).find((item) => item.name === walletName);
+    if (!wallet) {
+        return errorJson({ ok: false, violations: [`wallet '${walletName}' not found`] });
+    }
+    let fee = maxFeePerGas ? parseFlexibleBigint(maxFeePerGas) : 1000000000n;
+    if (!maxFeePerGas) {
+        try {
+            fee = parseQuantity(await rpcCall(endpoint, "eth_gasPrice", []));
+        }
+        catch {
+            fee = 1000000000n;
+        }
+    }
+    const preflight = await preflightTransfer({
+        endpoint,
+        walletName,
+        from: wallet.address,
+        to: recipient.address,
+        amount,
+        amountUnits: decimalToUnits(amount),
+        gasLimit: gasLimit ? parseFlexibleBigint(gasLimit) : 21000n,
+        maxFeePerGas: fee,
+        sign: false,
+        allowLowValueSigning: false,
+    });
+    const balance = preflight.checks.balance;
+    const lowValue = preflight.checks.wallet?.lowValue;
+    return text({
+        recipient,
+        summary: approvalSummary({
+            walletName,
+            from: wallet.address,
+            to: recipient.address,
+            recipientLabel: recipient.contact?.name,
+            amount,
+            asset: "LYTH",
+            feeCeiling: balance?.estimatedFeeCeiling,
+            remainingAfterCeiling: balance?.remainingAfterCeiling,
+            lowValueRemaining: lowValue?.accounting?.remainingToday,
+            preflightOk: preflight.ok,
+            violations: preflight.violations,
+            warnings: preflight.warnings,
+        }),
+        preflight,
+    });
 });
 server.tool("agent_wallet_create", "Create an explicit low-value agent operating wallet with user-approved purpose and caps.", {
     name: z.string().min(1).describe("Local agent wallet name, e.g. pizza-agent."),
@@ -1374,6 +1528,20 @@ server.tool("agent_wallet_drain", "Prepare and optionally sign a transfer that d
     if (!preflight.ok) {
         return errorJson({ recipient, preflight });
     }
+    const balance = preflight.checks.balance;
+    const summary = approvalSummary({
+        walletName: name,
+        from: wallet.address,
+        to: recipient.address,
+        recipientLabel: recipient.contact?.name,
+        amount: amountDecimal,
+        asset: "LYTH",
+        feeCeiling: balance?.estimatedFeeCeiling,
+        remainingAfterCeiling: balance?.remainingAfterCeiling,
+        preflightOk: preflight.ok,
+        violations: preflight.violations,
+        warnings: preflight.warnings,
+    });
     const encryptionKey = shouldSign
         ? encryptionKeyFromRpc(await rpcCall(endpoint, "lyth_getEncryptionKey", []))
         : undefined;
@@ -1408,6 +1576,7 @@ server.tool("agent_wallet_drain", "Prepare and optionally sign a transfer that d
             amount: amountDecimal,
             asset: "LYTH",
             nonce: toQuantity(resolvedNonce),
+            expiresAt: defaultOutboxExpiresAt(),
             note: "Created by agent_wallet_drain.",
         })
         : null;
@@ -1454,12 +1623,13 @@ server.tool("agent_wallet_drain", "Prepare and optionally sign a transfer that d
         txHash: typeof submitted?.txHash === "string" ? submitted.txHash : undefined,
         payloadHash: outboxEntry?.payloadHash,
         endpoint,
-        result: { submitted, wallet: compactWallet(paused), preflight },
+        result: { submitted, wallet: compactWallet(paused), preflight, summary },
         error: broadcastError?.message,
     });
     return text({
         endpoint,
         recipient,
+        summary,
         preflight,
         wallet: compactWallet(paused),
         built,
@@ -1602,6 +1772,7 @@ server.tool("wallet_build_transfer", "Build a native LYTH transfer from a stored
     if (!preflight.ok) {
         return errorJson({ recipient, preflight });
     }
+    const balance = preflight.checks.balance;
     const encryptionKey = shouldSign
         ? encryptionKeyFromRpc(await rpcCall(endpoint, "lyth_getEncryptionKey", []))
         : undefined;
@@ -1622,6 +1793,20 @@ server.tool("wallet_build_transfer", "Build a native LYTH transfer from a stored
     if (shouldSign && !built.signed) {
         return errorText("sign=true but no passphrase was supplied and low-value signing is not configured for this wallet");
     }
+    const summary = approvalSummary({
+        walletName,
+        from: wallet.address,
+        to: recipient.address,
+        recipientLabel: recipient.contact?.name,
+        amount,
+        asset: "LYTH",
+        feeCeiling: balance?.estimatedFeeCeiling,
+        remainingAfterCeiling: balance?.remainingAfterCeiling,
+        lowValueRemaining: built.lowValuePolicy?.remainingToday,
+        preflightOk: preflight.ok,
+        violations: preflight.violations,
+        warnings: preflight.warnings,
+    });
     const outboxEntry = built.signed
         ? await addOutboxEntry({
             network: NETWORK,
@@ -1635,6 +1820,7 @@ server.tool("wallet_build_transfer", "Build a native LYTH transfer from a stored
             amount,
             asset: "LYTH",
             nonce: toQuantity(resolvedNonce),
+            expiresAt: defaultOutboxExpiresAt(),
             policySnapshot: built.lowValuePolicy ?? wallet.lowValue,
             lowValueReserved: built.lowValuePolicy?.used === true,
             note: "Created by wallet_build_transfer. Retry this payload from the outbox instead of rebuilding after transient broadcast failure.",
@@ -1713,12 +1899,13 @@ server.tool("wallet_build_transfer", "Build a native LYTH transfer from a stored
         txHash: typeof submitted?.txHash === "string" ? submitted.txHash : undefined,
         payloadHash: outboxEntry?.payloadHash,
         endpoint,
-        result: submitted ?? { signed: Boolean(built.signed), broadcastRequested: Boolean(broadcast), preflight },
+        result: submitted ?? { signed: Boolean(built.signed), broadcastRequested: Boolean(broadcast), preflight, summary },
         error: broadcastError?.message,
     });
     return text({
         endpoint,
         recipient,
+        summary,
         preflight,
         built,
         outbox: outboxEntry,
@@ -1870,7 +2057,8 @@ server.tool("submit_signed_transaction", "Broadcast an already-signed transactio
     kind: z.enum(["eth_raw", "lyth_encrypted"]).describe("eth_raw uses eth_sendRawTransaction; lyth_encrypted uses lyth_submitEncrypted."),
     payloadHex: z.string().describe("0x-prefixed signed raw transaction or encrypted envelope hex."),
     outboxId: z.string().optional().describe("Optional local outbox id to update with the broadcast attempt."),
-}, async ({ kind, payloadHex, outboxId }) => {
+    allowExpired: z.boolean().optional().describe("Allow submitting an outbox payload after local reservation expiry. Default false."),
+}, async ({ kind, payloadHex, outboxId, allowExpired }) => {
     if (!isHex(payloadHex)) {
         return errorText("payloadHex must be 0x-prefixed hex");
     }
@@ -1878,6 +2066,9 @@ server.tool("submit_signed_transaction", "Broadcast an already-signed transactio
         return errorText("Broadcast disabled. Set LYTH_MCP_ENABLE_SUBMIT=1 to allow this MCP to submit already-signed payloads.");
     }
     const entry = outboxId ? await getOutboxEntry(outboxId) : null;
+    if (entry?.status === "expired" && allowExpired !== true) {
+        return errorText("Outbox entry is expired locally. Set allowExpired=true only if the user explicitly wants to submit a payload whose MCP allowance reservation was released.");
+    }
     const endpoint = await firstWritableEndpoint();
     const method = kind === "eth_raw" ? "eth_sendRawTransaction" : "lyth_submitEncrypted";
     try {
@@ -1886,8 +2077,13 @@ server.tool("submit_signed_transaction", "Broadcast an already-signed transactio
             ? await recordOutboxAttempt(outboxId, { at: new Date().toISOString(), endpoint, method, ok: true, txHash })
             : null;
         let lowValueAccounting = null;
-        if (entry?.lowValueReserved && entry.status === "signed" && entry.walletName && entry.amount) {
-            lowValueAccounting = await moveLowValueAccounting({ walletName: entry.walletName, amount: entry.amount, from: "reserved", to: "submitted" });
+        if (entry?.lowValueReserved && entry.walletName && entry.amount) {
+            if (entry.status === "signed") {
+                lowValueAccounting = await moveLowValueAccounting({ walletName: entry.walletName, amount: entry.amount, from: "reserved", to: "submitted" });
+            }
+            else if (entry.status === "expired" && allowExpired === true) {
+                lowValueAccounting = await moveLowValueAccounting({ walletName: entry.walletName, amount: entry.amount, from: "expired", to: "submitted" });
+            }
         }
         const receipt = await addReceipt({
             kind: "submit_signed_transaction",
@@ -1931,8 +2127,14 @@ server.tool("tx_outbox_list", "List local signed payloads that can be retried wi
     entries: await listOutboxEntries({ status: status, walletName, limit }),
 }));
 server.tool("tx_outbox_get", "Get a local outbox entry by id.", { id: z.string().min(1) }, async ({ id }) => text(await getOutboxEntry(id)));
-server.tool("tx_outbox_retry", "Retry a signed payload from the local outbox. Requires LYTH_MCP_ENABLE_SUBMIT=1.", { id: z.string().min(1) }, async ({ id }) => {
+server.tool("tx_outbox_retry", "Retry a signed payload from the local outbox. Requires LYTH_MCP_ENABLE_SUBMIT=1.", {
+    id: z.string().min(1),
+    allowExpired: z.boolean().optional().describe("Allow retrying after local reservation expiry. Default false."),
+}, async ({ id, allowExpired }) => {
     const entry = await getOutboxEntry(id);
+    if (entry.status === "expired" && allowExpired !== true) {
+        return errorText("Outbox entry is expired locally. Set allowExpired=true only if the user explicitly wants to submit a payload whose MCP allowance reservation was released.");
+    }
     if (!SUBMIT_ENABLED) {
         return errorText("Broadcast disabled. Set LYTH_MCP_ENABLE_SUBMIT=1 to retry outbox payloads.");
     }
@@ -1941,9 +2143,15 @@ server.tool("tx_outbox_retry", "Retry a signed payload from the local outbox. Re
     try {
         const txHash = await submitPayload(endpoint, entry.kind, entry.payloadHex);
         const outbox = await recordOutboxAttempt(id, { at: new Date().toISOString(), endpoint, method, ok: true, txHash });
-        const lowValueAccounting = entry.lowValueReserved && entry.status === "signed" && entry.walletName && entry.amount
-            ? await moveLowValueAccounting({ walletName: entry.walletName, amount: entry.amount, from: "reserved", to: "submitted" })
-            : null;
+        let lowValueAccounting = null;
+        if (entry.lowValueReserved && entry.walletName && entry.amount) {
+            if (entry.status === "signed") {
+                lowValueAccounting = await moveLowValueAccounting({ walletName: entry.walletName, amount: entry.amount, from: "reserved", to: "submitted" });
+            }
+            else if (entry.status === "expired" && allowExpired === true) {
+                lowValueAccounting = await moveLowValueAccounting({ walletName: entry.walletName, amount: entry.amount, from: "expired", to: "submitted" });
+            }
+        }
         const receipt = await addReceipt({
             kind: "tx_outbox_retry",
             status: "submitted",
@@ -1994,6 +2202,39 @@ server.tool("tx_outbox_forget", "Remove a local outbox entry. This does not inva
     ...(await forgetOutboxEntry(id)),
     warning: "Forgetting removes the local record only. It cannot invalidate a signed payload that was copied elsewhere.",
 }));
+server.tool("tx_outbox_release", "Release a local low-value allowance reservation for a signed/not-submitted outbox entry. This cannot invalidate the signed payload.", {
+    id: z.string().min(1),
+    target: z.enum(["expired", "failed"]).optional().describe("Accounting bucket to move the reservation into. Default expired."),
+    confirm: z.literal("RELEASE_LOW_VALUE_RESERVATION"),
+}, async ({ id, target }) => text(await releaseLowValueReservation({ outboxId: id, to: target ?? "expired" })));
+server.tool("tx_outbox_expire_stale", "List or release expired signed/not-submitted low-value outbox reservations.", {
+    release: z.boolean().optional().describe("When true, release eligible reservations. Default false."),
+    confirm: z.literal("EXPIRE_STALE_RESERVATIONS").optional().describe("Required when release=true."),
+    limit: z.number().min(1).max(100).optional(),
+}, async ({ release, confirm, limit }) => {
+    if (release && confirm !== "EXPIRE_STALE_RESERVATIONS") {
+        return errorText("confirm must be EXPIRE_STALE_RESERVATIONS when release=true");
+    }
+    const entries = (await listOutboxEntries({ limit: limit ?? 100 }))
+        .filter((entry) => entry.status === "signed" && entry.lowValueReserved === true && isPast(entry.expiresAt));
+    if (!release) {
+        return text({
+            release: false,
+            eligible: entries,
+            warning: "These entries are locally expired candidates. Expiring them releases MCP allowance only; signed payloads may still be valid elsewhere.",
+        });
+    }
+    const released = [];
+    for (const entry of entries) {
+        released.push(await releaseLowValueReservation({ outboxId: entry.id, to: "expired" }));
+    }
+    return text({
+        release: true,
+        count: released.length,
+        released,
+        warning: "Released local MCP allowance reservations only. This cannot invalidate signed payloads copied elsewhere.",
+    });
+});
 server.tool("tx_status_summary", "Summarize live transaction status by tx hash or local outbox id.", {
     txHash: z.string().optional(),
     outboxId: z.string().optional(),
