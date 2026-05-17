@@ -15,6 +15,7 @@
     "examples",
     "runbooks",
     "scripts/verify-dist.cjs",
+    "bridge_routes.example.json",
     "vendors.example.json"
   ],
   "scripts": {

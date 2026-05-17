@@ -1,0 +1,226 @@
+{
+  "schemaVersion": 1,
+  "network": "testnet-69420",
+  "issuer": "Monolythium MCP example registry",
+  "updatedAt": "2026-05-17T00:00:00.000Z",
+  "epochHours": 14,
+  "disclaimer": "Example bridge route metadata for MCP planning. Routes are draft unless status is active.",
+  "routes": [
+    {
+      "id": "eth-usdc-to-mono-zk",
+      "displayName": "Ethereum finalized USDC to Mono USDC",
+      "status": "draft",
+      "routeType": "zk_light_client",
+      "sourceChain": "Ethereum",
+      "destinationChain": "Monolythium",
+      "sourceAsset": "USDC",
+      "destinationAsset": "mUSDC",
+      "cooldown": {
+        "epochs": 1,
+        "label": "1 epoch (~14h) after zk/light-client cutover"
+      },
+      "finality": {
+        "threshold": "Ethereum finalized checkpoint",
+        "notes": "Hard finality is minutes; cooldown is dominated by operational safety margin."
+      },
+      "fees": {
+        "flat": "1",
+        "bps": 5,
+        "asset": "USDC"
+      },
+      "limits": {
+        "minAmount": "10",
+        "maxAmount": "100000"
+      },
+      "drainCap": {
+        "perEpoch": "500000",
+        "remaining": "500000",
+        "asset": "USDC"
+      },
+      "circuitBreaker": {
+        "enabled": true,
+        "paused": false
+      },
+      "trustAssumptions": [
+        "SP1/FRI proof verifies finalized Ethereum event inclusion.",
+        "Mono verifier precompile and route circuit must be audited before activation."
+      ],
+      "dependencies": ["Ethereum finality", "SP1 prover network", "Mono bridge verifier"],
+      "audits": [],
+      "insurance": "TBD",
+      "upgradeAuthority": "TBD before mainnet",
+      "liquidityVenues": ["Mono native spot markets"],
+      "notes": ["Target route for replacing long human dispute windows."]
+    },
+    {
+      "id": "cosmos-usdc-to-mono-ibc",
+      "displayName": "IBC USDC to Mono USDC",
+      "status": "draft",
+      "routeType": "ibc",
+      "sourceChain": "Cosmos",
+      "destinationChain": "Monolythium",
+      "sourceAsset": "USDC",
+      "destinationAsset": "mUSDC",
+      "cooldown": {
+        "epochs": 1,
+        "label": "1 epoch target; lower possible after operations prove stable"
+      },
+      "finality": {
+        "threshold": "IBC client finality",
+        "notes": "Single-slot style finality still keeps an operational cooldown at launch."
+      },
+      "fees": {
+        "flat": "0.5",
+        "bps": 3,
+        "asset": "USDC"
+      },
+      "limits": {
+        "minAmount": "5",
+        "maxAmount": "100000"
+      },
+      "drainCap": {
+        "perEpoch": "250000",
+        "remaining": "250000",
+        "asset": "USDC"
+      },
+      "circuitBreaker": {
+        "enabled": true,
+        "paused": false
+      },
+      "trustAssumptions": ["IBC light-client route with bounded operational cooldown."],
+      "dependencies": ["Source chain IBC client", "Mono IBC endpoint"],
+      "audits": [],
+      "insurance": "TBD",
+      "upgradeAuthority": "TBD before mainnet",
+      "liquidityVenues": ["Mono native spot markets"]
+    },
+    {
+      "id": "sol-usdc-to-mono-zk",
+      "displayName": "Solana USDC to Mono USDC",
+      "status": "draft",
+      "routeType": "zk_light_client",
+      "sourceChain": "Solana",
+      "destinationChain": "Monolythium",
+      "sourceAsset": "USDC",
+      "destinationAsset": "mUSDC",
+      "cooldown": {
+        "epochs": 2,
+        "label": "1-2 epochs depending on finality confidence; default 2 epochs"
+      },
+      "finality": {
+        "threshold": "Finalized Solana slot plus route-specific safety margin",
+        "notes": "Cooldown is intentionally conservative until rollback/finality assumptions are battle-tested."
+      },
+      "fees": {
+        "flat": "1",
+        "bps": 8,
+        "asset": "USDC"
+      },
+      "limits": {
+        "minAmount": "10",
+        "maxAmount": "50000"
+      },
+      "drainCap": {
+        "perEpoch": "150000",
+        "remaining": "150000",
+        "asset": "USDC"
+      },
+      "circuitBreaker": {
+        "enabled": true,
+        "paused": false
+      },
+      "trustAssumptions": ["Solana finality proof circuit and source-chain client assumptions."],
+      "dependencies": ["Solana finality", "SP1 prover network", "Mono bridge verifier"],
+      "audits": [],
+      "insurance": "TBD",
+      "upgradeAuthority": "TBD before mainnet",
+      "liquidityVenues": ["Mono native spot markets"]
+    },
+    {
+      "id": "btc-to-mono-zk",
+      "displayName": "Bitcoin BTC to Mono BTC",
+      "status": "draft",
+      "routeType": "zk_light_client",
+      "sourceChain": "Bitcoin",
+      "destinationChain": "Monolythium",
+      "sourceAsset": "BTC",
+      "destinationAsset": "mBTC",
+      "cooldown": {
+        "epochs": 2,
+        "label": "2 epochs (~28h) or value-tiered limits"
+      },
+      "finality": {
+        "threshold": "6+ confirmations plus value-tiered safety window",
+        "notes": "Bitcoin reorg history justifies a larger launch buffer."
+      },
+      "fees": {
+        "flat": "0.0001",
+        "bps": 5,
+        "asset": "BTC"
+      },
+      "limits": {
+        "minAmount": "0.001",
+        "maxAmount": "10"
+      },
+      "drainCap": {
+        "perEpoch": "25",
+        "remaining": "25",
+        "asset": "BTC"
+      },
+      "circuitBreaker": {
+        "enabled": true,
+        "paused": false
+      },
+      "trustAssumptions": ["Bitcoin header/finality proof circuit and route-specific withdrawal limits."],
+      "dependencies": ["Bitcoin headers", "SP1 prover network", "Mono bridge verifier"],
+      "audits": [],
+      "insurance": "TBD",
+      "upgradeAuthority": "TBD before mainnet",
+      "liquidityVenues": ["Mono native spot markets"]
+    },
+    {
+      "id": "trusted-usdc-transitional",
+      "displayName": "Trusted transitional USDC route",
+      "status": "draft",
+      "routeType": "trusted",
+      "sourceChain": "Ethereum",
+      "destinationChain": "Monolythium",
+      "sourceAsset": "USDC",
+      "destinationAsset": "mUSDC",
+      "cooldown": {
+        "hours": 168,
+        "label": "7 days until zk/light-client route replaces it"
+      },
+      "finality": {
+        "threshold": "Operator attestations plus manual dispute window",
+        "notes": "Kept only as a transitional fallback model."
+      },
+      "fees": {
+        "flat": "2",
+        "bps": 20,
+        "asset": "USDC"
+      },
+      "limits": {
+        "minAmount": "10",
+        "maxAmount": "25000"
+      },
+      "drainCap": {
+        "perEpoch": "50000",
+        "remaining": "50000",
+        "asset": "USDC"
+      },
+      "circuitBreaker": {
+        "enabled": true,
+        "paused": true,
+        "reason": "Trusted route is example-only and should not be used while zk route is being designed."
+      },
+      "trustAssumptions": ["Federated operators or multisig can censor or fail.", "Human dispute window is required."],
+      "dependencies": ["Operator set", "Manual monitoring"],
+      "audits": [],
+      "insurance": "TBD",
+      "upgradeAuthority": "Operator multisig",
+      "liquidityVenues": ["Mono native spot markets"],
+      "notes": ["This route exists to explain why trusted bridges keep longer cooldowns."]
+    }
+  ]
+}

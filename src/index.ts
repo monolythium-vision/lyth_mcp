@@ -54,6 +54,18 @@ import {
   type ConnectorRecord,
 } from "./connectors.js";
 import {
+  bridgeCooldownMatrix,
+  bridgeRegistrySummary,
+  bridgeStatusSummary,
+  getBridgeRoute,
+  listBridgeRoutes,
+  loadBridgeRegistry,
+  quoteBridgeRoute,
+  selectBridgeRoute,
+  type BridgeRouteStatus,
+  type BridgeRouteType,
+} from "./bridges.js";
+import {
   createOrder,
   getOrder,
   listOrders,
@@ -142,6 +154,8 @@ const DEFAULT_OUTBOX_EXPIRY_HOURS = Number(process.env.LYTH_MCP_OUTBOX_EXPIRY_HO
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_VENDOR_REGISTRY_PATH = resolve(PACKAGE_ROOT, "vendors.example.json");
 const VENDOR_REGISTRY_PATH = process.env.LYTH_MCP_VENDOR_REGISTRY || DEFAULT_VENDOR_REGISTRY_PATH;
+const DEFAULT_BRIDGE_ROUTE_REGISTRY_PATH = resolve(PACKAGE_ROOT, "bridge_routes.example.json");
+const BRIDGE_ROUTE_REGISTRY_PATH = process.env.LYTH_MCP_BRIDGE_ROUTE_REGISTRY || DEFAULT_BRIDGE_ROUTE_REGISTRY_PATH;
 const RUNBOOK_REGISTRY_PATH = process.env.LYTH_MCP_RUNBOOK_REGISTRY || resolve(PACKAGE_ROOT, "runbooks");
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
@@ -1040,6 +1054,10 @@ async function loadVendors() {
   return loadVendorRegistry(VENDOR_REGISTRY_PATH);
 }
 
+async function loadBridgeRoutes() {
+  return loadBridgeRegistry(BRIDGE_ROUTE_REGISTRY_PATH);
+}
+
 async function quoteOrder(args: {
   vendorId: string;
   itemId?: string;
@@ -1391,6 +1409,8 @@ const receiptStatusEnum = z.enum(["drafted", "signed", "submitted", "confirmed",
 const orderStatusEnum = z.enum(["created", "payment_prepared", "paid", "fulfillment_requested", "fulfilled_demo", "fulfilled_manual", "cancelled"]);
 const bookingStatusEnum = z.enum(["requested", "provider_requested", "accepted_demo", "escrow_prepared", "paid", "completed_demo", "cancelled", "disputed_demo"]);
 const invoiceStatusEnum = z.enum(["open", "paid", "cancelled", "expired"]);
+const bridgeStatusEnum = z.enum(["active", "draft", "degraded", "paused"]);
+const bridgeRouteTypeEnum = z.enum(["ibc", "zk_light_client", "trusted", "issuer_native", "manual"]);
 
 const recordSchema = z.record(z.unknown()).optional();
 const policySchema = z.object({
@@ -1466,6 +1486,7 @@ server.tool("mcp_self_check", "Check MCP install, config, stores, and RPC reacha
       invoices: await invoiceStoreInfo(),
       merchantPolicies: await merchantPolicyStoreInfo(),
       vendorRegistry: VENDOR_REGISTRY_PATH,
+      bridgeRouteRegistry: BRIDGE_ROUTE_REGISTRY_PATH,
       runbookRegistry: RUNBOOK_REGISTRY_PATH,
     },
     guidance: [
@@ -3201,6 +3222,150 @@ server.tool(
     return text({
       registry: vendorRegistrySummary(registry),
       vendors: searchVendors(registry.registry, { query, category, limit }),
+    });
+  },
+);
+
+server.tool(
+  "bridge_routes",
+  "List configured bridge/liquidity routes with status, cooldown, and trust model metadata.",
+  {
+    asset: z.string().optional(),
+    sourceChain: z.string().optional(),
+    destinationChain: z.string().optional(),
+    status: bridgeStatusEnum.optional(),
+    routeType: bridgeRouteTypeEnum.optional(),
+    limit: z.number().min(1).max(100).optional(),
+  },
+  async ({ asset, sourceChain, destinationChain, status, routeType, limit }) => {
+    const registry = await loadBridgeRoutes();
+    return text({
+      registry: bridgeRegistrySummary(registry),
+      routes: listBridgeRoutes(registry.registry, {
+        asset,
+        sourceChain,
+        destinationChain,
+        status: status as BridgeRouteStatus | undefined,
+        routeType: routeType as BridgeRouteType | undefined,
+        limit,
+      }),
+      warning: "Route metadata is planning/preflight data. Only routes with status=active should be treated as executable.",
+    });
+  },
+);
+
+server.tool(
+  "bridge_route_get",
+  "Get one bridge route with trust assumptions, cooldown, drain cap, and circuit-breaker metadata.",
+  {
+    routeId: z.string().min(1),
+  },
+  async ({ routeId }) => {
+    const registry = await loadBridgeRoutes();
+    const route = getBridgeRoute(registry.registry, routeId);
+    return text({
+      registry: bridgeRegistrySummary(registry),
+      route,
+      cooldown: bridgeCooldownMatrix({ ...registry.registry, routes: [route] })[0],
+      status: bridgeStatusSummary({ ...registry.registry, routes: [route] })[0],
+    });
+  },
+);
+
+server.tool(
+  "bridge_quote",
+  "Preflight a bridge amount against route status, cooldown, fees, drain caps, and circuit breakers. Does not build or submit a bridge transaction.",
+  {
+    amount: z.string(),
+    asset: z.string(),
+    routeId: z.string().optional(),
+    sourceChain: z.string().optional(),
+    destinationChain: z.string().optional(),
+  },
+  async ({ amount, asset, routeId, sourceChain, destinationChain }) => {
+    const registry = await loadBridgeRoutes();
+    const route = routeId
+      ? getBridgeRoute(registry.registry, routeId)
+      : selectBridgeRoute(registry.registry, { asset, sourceChain, destinationChain });
+    if (!route) {
+      return errorJson({
+        ok: false,
+        violations: [`No bridge route found for ${asset}${sourceChain ? ` from ${sourceChain}` : ""}${destinationChain ? ` to ${destinationChain}` : ""}.`],
+        registry: bridgeRegistrySummary(registry),
+      });
+    }
+    const quote = quoteBridgeRoute(route, {
+      amount,
+      asset,
+      epochHours: registry.registry.epochHours,
+    });
+    return quote.executable
+      ? text({ registry: bridgeRegistrySummary(registry), quote })
+      : errorJson({ registry: bridgeRegistrySummary(registry), quote });
+  },
+);
+
+server.tool(
+  "bridge_cooldown_matrix",
+  "Show the configured cooldown matrix for IBC, zk-light-client, Bitcoin, Solana, Ethereum, and trusted routes.",
+  {
+    asset: z.string().optional(),
+  },
+  async ({ asset }) => {
+    const registry = await loadBridgeRoutes();
+    const routes = asset
+      ? { ...registry.registry, routes: listBridgeRoutes(registry.registry, { asset }) }
+      : registry.registry;
+    return text({
+      registry: bridgeRegistrySummary(registry),
+      matrix: bridgeCooldownMatrix(routes),
+    });
+  },
+);
+
+server.tool("bridge_status_summary", "Summarize configured bridge route health, circuit breakers, drain caps, and risk attention flags.", {}, async () => {
+  const registry = await loadBridgeRoutes();
+  return text({
+    registry: bridgeRegistrySummary(registry),
+    routes: bridgeStatusSummary(registry.registry),
+  });
+});
+
+server.tool(
+  "liquidity_onboarding",
+  "Explain how to bring an asset into Mono using configured bridge/liquidity routes.",
+  {
+    asset: z.string(),
+    sourceChain: z.string().optional(),
+    amount: z.string().optional(),
+  },
+  async ({ asset, sourceChain, amount }) => {
+    const registry = await loadBridgeRoutes();
+    const routes = listBridgeRoutes(registry.registry, {
+      asset,
+      sourceChain,
+      destinationChain: "Monolythium",
+    });
+    const recommended = selectBridgeRoute(registry.registry, {
+      asset,
+      sourceChain,
+      destinationChain: "Monolythium",
+    });
+    const quote = recommended && amount
+      ? quoteBridgeRoute(recommended, { amount, asset, epochHours: registry.registry.epochHours })
+      : undefined;
+    return text({
+      asset: asset.toUpperCase(),
+      sourceChain,
+      registry: bridgeRegistrySummary(registry),
+      recommendedRoute: recommended,
+      quote,
+      routes,
+      guidance: [
+        "Prefer IBC or zk-light-client routes over trusted/transitional routes when active.",
+        "Draft routes explain intended cooldowns and risk, but should not be treated as executable.",
+        "Trusted routes should keep longer cooldowns until a zk/light-client path replaces them.",
+      ],
     });
   },
 );

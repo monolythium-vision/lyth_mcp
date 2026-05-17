@@ -146,6 +146,7 @@ examples/claude_desktop_config.json
 | `LYTH_MCP_TIMEOUT_MS` | `10000` | Per-request timeout |
 | `LYTH_MCP_MAX_OUTPUT` | `16000` | MCP response truncation limit |
 | `LYTH_MCP_VENDOR_REGISTRY` | bundled `vendors.example.json` | Optional path override for local vendor registry JSON |
+| `LYTH_MCP_BRIDGE_ROUTE_REGISTRY` | bundled `bridge_routes.example.json` | Optional path override for local bridge/liquidity route metadata |
 | `LYTH_MCP_ENABLE_SUBMIT` | `0` | Set to `1` to allow broadcasting already-signed payloads |
 | `LYTH_MCP_WALLET_STORE` | `~/.lyth_mcp/wallets.json` | Local encrypted wallet store path |
 | `LYTH_MCP_HOT_KEY` | `~/.lyth_mcp/hot.key` | Local key file used only for opt-in low-value mode |
@@ -203,6 +204,12 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `validate_runbook` | Check a runbook against spending policy and safety rules |
 | `prepare_wallet_request` | Prepare a wallet approval payload where supported |
 | `vendor_search` | Search a local vendor registry JSON |
+| `bridge_routes` | List bridge/liquidity routes with status, cooldown, and trust metadata |
+| `bridge_route_get` | Get one bridge route's risk/cooldown/circuit-breaker metadata |
+| `bridge_quote` | Preflight a bridge amount against route status, fees, caps, cooldown, and risk |
+| `bridge_cooldown_matrix` | Show configured cooldowns by route |
+| `bridge_status_summary` | Summarize route health, drain caps, and attention flags |
+| `liquidity_onboarding` | Explain how to bring an asset into Mono through configured routes |
 | `vendor_registry_info` | Show registry hashes, issuer, expiry, signature status, and categories |
 | `vendor_get` | Get one vendor by id |
 | `connector_set` | Create or update an encrypted local webhook connector |
@@ -301,6 +308,29 @@ runbooks/
 The MCP exposes those files through a local canonical registry. `runbook_list` returns stable `sha256:` content hashes, and `runbook_verify` can compare a runbook against an expected hash. This is a release-local integrity layer; the future target is signed SDK/protocol registry metadata.
 
 `draft_runbook`, `validate_runbook`, and `prepare_wallet_request` attach canonical metadata when a bundled runbook exists. Drafts include the runbook id, version, content hash, required fields, optional fields, and missing required fields. Validation fails if a canonical required field is absent.
+
+## Bridge Route Registry
+
+By default, the MCP loads `bridge_routes.example.json`. These routes are planning/preflight metadata unless a route is explicitly marked `active`.
+
+The registry lets an assistant answer:
+
+- which USDC/ETH/BTC routes exist;
+- whether the route is IBC, zk-light-client, trusted, issuer-native, or manual;
+- cooldown by source chain and trust model;
+- route fees, limits, drain caps, circuit-breaker status, finality threshold, and trust assumptions.
+
+Use `bridge_quote` to check a specific amount before a future bridge transaction builder exists. Draft routes intentionally return `executable: false` so the assistant can explain the path without pretending a live bridge transfer can be sent.
+
+The bundled cooldown posture is:
+
+| Route family | Suggested cooldown |
+|---|---|
+| IBC/Cosmos-style finality | 1 epoch, maybe lower later |
+| Ethereum finalized events | 1 epoch after zk/light-client verification |
+| Solana | 1-2 epochs depending on finality confidence |
+| Bitcoin | 2 epochs or value-tiered limits |
+| Trusted/transitional bridge | Longer cooldown, e.g. 7 days, until zk/light-client path replaces it |
 
 ## Wallet Setup
 

@@ -283,7 +283,7 @@ Whitepaper refs: §17, §18, §21.6, §22.10, §26, §29.1, §30.7.
 - [ ] **CORE SDK INDEXER** Bridge route registry tools.
   - `bridge_routes`, `bridge_route_get`, `bridge_asset_get`, `bridge_metadata_get`.
   - Show trust model: IBC light-client, SP1-zk, federated multisig, other.
-- [ ] **MCP** Route-risk explanation.
+- [x] **MCP** Route-risk explanation.
   - Display trust assumptions, external dependencies, audit history, insurance pool, drain cap, cooldown, finality threshold, upgrade authority.
 - [ ] **CORE SDK** Bridge quote/preflight.
   - `bridge_quote`, `bridge_preflight`.
@@ -294,7 +294,7 @@ Whitepaper refs: §17, §18, §21.6, §22.10, §26, §29.1, §30.7.
 - [ ] **CORE SDK** Cross-chain swap tools.
   - `xswap_quote`, `xswap_intent_draft`, `xswap_claim_draft`, `xswap_status`.
   - Verify proof-bound inputs: chain id, source root, token, amount, recipient, nonce, deadline.
-- [ ] **MCP** Cooldown matrix and route config explanation.
+- [x] **MCP** Cooldown matrix and route config explanation.
   - IBC/Cosmos finality: 1 epoch target.
   - Ethereum finalized events: 1 epoch target once verified.
   - Solana: 1-2 epochs depending on finality confidence.
@@ -302,9 +302,9 @@ Whitepaper refs: §17, §18, §21.6, §22.10, §26, §29.1, §30.7.
   - Trusted/transitional routes: longer cooldown until zk/light-client path replaces them.
 - [ ] **MCP** Bridge circuit-breaker watcher.
   - Alert if route halted, drain cap near exhaustion, light client stale, proof verifier sunset active.
-- [ ] **MCP** USDC/native issuer support tracker.
+- [x] **MCP** USDC/native issuer support tracker.
   - Current support status, issuer route, wrapped route, route risk, liquidity venue.
-- [ ] **MCP** Liquidity onboarding assistant.
+- [x] **MCP** Liquidity onboarding assistant.
   - "How do I bring ETH/BTC/USDC into Mono?"
   - Answer with available routes, risks, fees, cooldowns, and recommended path.
 
@@ -467,7 +467,8 @@ Whitepaper refs: §18, §22, §24.2, §26, §27, §29.5, §99.8.
 - [ ] **MCP** Agent-commerce readiness.
   - Spending-policy, discovery, availability, escrow, arbiter, reputation, attestation, issuer, consent tools live.
 - [ ] **MCP** Bridge readiness.
-  - Route metadata, cooldowns, drain caps, circuit breakers, bridge quotes, bridge status watchers live.
+  - Route metadata, cooldowns, drain caps, circuit breakers, and local bridge quotes are implemented via `bridge_routes`, `bridge_route_get`, `bridge_quote`, `bridge_cooldown_matrix`, `bridge_status_summary`, and `liquidity_onboarding`.
+  - Live status watchers and transaction builders still require core/indexer bridge surfaces.
 - [ ] **MCP** Wallet handoff readiness.
   - Production path supports wallet handoff for high-value funds.
   - MCP-local agent hot-wallet mode is explicit opt-in, capped, revocable, and receipt-covered.
