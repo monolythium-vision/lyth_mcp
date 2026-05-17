@@ -270,6 +270,7 @@ export async function buildTransfer(args) {
             built.lowValuePolicy = {
                 used: true,
                 remainingToday: updated.remainingToday,
+                accounting: updated.accounting,
                 warning: "Low-value mode signs without prompting for the passphrase. Keep only capped funds in this agent wallet.",
             };
         }
@@ -292,6 +293,12 @@ export function summarizeWallet(record) {
                 dailyLimit: record.lowValue.dailyLimit,
                 day: record.lowValue.day,
                 spentToday: record.lowValue.spentToday,
+                reservedToday: record.lowValue.reservedToday,
+                submittedToday: record.lowValue.submittedToday,
+                confirmedToday: record.lowValue.confirmedToday,
+                failedToday: record.lowValue.failedToday,
+                expiredToday: record.lowValue.expiredToday,
+                accounting: summarizeLowValueAccounting(record.lowValue),
                 configuredAt: record.lowValue.configuredAt,
             }
             : undefined,
@@ -358,6 +365,11 @@ async function createLowValuePolicy(mnemonic, maxAmount, dailyLimit) {
         dailyLimit,
         day: todayKey(),
         spentToday: "0",
+        reservedToday: "0",
+        submittedToday: "0",
+        confirmedToday: "0",
+        failedToday: "0",
+        expiredToday: "0",
         configuredAt: new Date().toISOString(),
         encryptedMnemonic: encryptSecret(mnemonic, await readOrCreateKey(hotKeyPath())),
     };
@@ -396,8 +408,7 @@ function assertLowValueAllowed(policy, amountUnits) {
         throw new Error(`amount exceeds low-value maxAmount ${policy.maxAmount} LYTH; passphrase required`);
     }
     if (policy.dailyLimit) {
-        const today = todayKey();
-        const spent = policy.day === today ? decimalToUnits(policy.spentToday ?? "0") : 0n;
+        const spent = lowValueLockedUnits(policy);
         const daily = decimalToUnits(policy.dailyLimit);
         if (spent + amountUnits > daily) {
             throw new Error(`amount exceeds low-value dailyLimit ${policy.dailyLimit} LYTH; passphrase required`);
@@ -410,17 +421,105 @@ async function recordLowValueSpend(walletName, amountUnits) {
     if (!record?.lowValue) {
         return {};
     }
-    const today = todayKey();
-    const current = record.lowValue.day === today ? decimalToUnits(record.lowValue.spentToday ?? "0") : 0n;
-    const next = current + amountUnits;
-    record.lowValue.day = today;
-    record.lowValue.spentToday = unitsToDecimal(next);
+    resetLowValueDayIfNeeded(record.lowValue);
+    const current = decimalToUnits(record.lowValue.reservedToday ?? record.lowValue.spentToday ?? "0");
+    record.lowValue.reservedToday = unitsToDecimal(current + amountUnits);
+    record.lowValue.spentToday = record.lowValue.reservedToday;
     await writeWalletStore(store);
-    if (!record.lowValue.dailyLimit) {
-        return {};
+    const accounting = summarizeLowValueAccounting(record.lowValue);
+    return { remainingToday: accounting.remainingToday, accounting };
+}
+export async function moveLowValueAccounting(args) {
+    const amountUnits = decimalToUnits(args.amount);
+    const store = await readWalletStore();
+    const record = store.wallets.find((w) => w.name === args.walletName);
+    if (!record?.lowValue) {
+        return null;
     }
-    const remaining = decimalToUnits(record.lowValue.dailyLimit) - next;
-    return { remainingToday: unitsToDecimal(remaining < 0n ? 0n : remaining) };
+    resetLowValueDayIfNeeded(record.lowValue);
+    const fromKey = lowValueBucketKey(args.from);
+    const toKey = lowValueBucketKey(args.to);
+    const fromValue = decimalToUnits(record.lowValue[fromKey] ?? "0");
+    record.lowValue[fromKey] = unitsToDecimal(fromValue > amountUnits ? fromValue - amountUnits : 0n);
+    record.lowValue[toKey] = unitsToDecimal(decimalToUnits(record.lowValue[toKey] ?? "0") + amountUnits);
+    record.lowValue.spentToday = unitsToDecimal(lowValueLockedUnits(record.lowValue));
+    await writeWalletStore(store);
+    return summarizeLowValueAccounting(record.lowValue);
+}
+export function summarizeLowValueAccounting(policy) {
+    const today = todayKey();
+    if (policy.day !== today) {
+        return {
+            day: today,
+            reserved: "0",
+            submitted: "0",
+            confirmed: "0",
+            failed: "0",
+            expired: "0",
+            totalLocked: "0",
+            remainingToday: policy.dailyLimit,
+        };
+    }
+    const reserved = decimalToUnits(policy.reservedToday ?? policy.spentToday ?? "0");
+    const submitted = decimalToUnits(policy.submittedToday ?? "0");
+    const confirmed = decimalToUnits(policy.confirmedToday ?? "0");
+    const failed = decimalToUnits(policy.failedToday ?? "0");
+    const expired = decimalToUnits(policy.expiredToday ?? "0");
+    const totalLocked = reserved + submitted + confirmed;
+    const remainingToday = policy.dailyLimit
+        ? decimalToUnits(policy.dailyLimit) - totalLocked
+        : undefined;
+    return {
+        day: today,
+        reserved: unitsToDecimal(reserved),
+        submitted: unitsToDecimal(submitted),
+        confirmed: unitsToDecimal(confirmed),
+        failed: unitsToDecimal(failed),
+        expired: unitsToDecimal(expired),
+        totalLocked: unitsToDecimal(totalLocked),
+        remainingToday: remainingToday === undefined ? undefined : unitsToDecimal(remainingToday < 0n ? 0n : remainingToday),
+    };
+}
+function resetLowValueDayIfNeeded(policy) {
+    const today = todayKey();
+    if (policy.day === today) {
+        policy.reservedToday ??= policy.spentToday ?? "0";
+        policy.submittedToday ??= "0";
+        policy.confirmedToday ??= "0";
+        policy.failedToday ??= "0";
+        policy.expiredToday ??= "0";
+        return;
+    }
+    policy.day = today;
+    policy.spentToday = "0";
+    policy.reservedToday = "0";
+    policy.submittedToday = "0";
+    policy.confirmedToday = "0";
+    policy.failedToday = "0";
+    policy.expiredToday = "0";
+}
+function lowValueLockedUnits(policy) {
+    if (policy.day !== todayKey()) {
+        return 0n;
+    }
+    const reserved = decimalToUnits(policy.reservedToday ?? policy.spentToday ?? "0");
+    const submitted = decimalToUnits(policy.submittedToday ?? "0");
+    const confirmed = decimalToUnits(policy.confirmedToday ?? "0");
+    return reserved + submitted + confirmed;
+}
+function lowValueBucketKey(bucket) {
+    switch (bucket) {
+        case "reserved":
+            return "reservedToday";
+        case "submitted":
+            return "submittedToday";
+        case "confirmed":
+            return "confirmedToday";
+        case "failed":
+            return "failedToday";
+        case "expired":
+            return "expiredToday";
+    }
 }
 function walletKeyProtection(record) {
     return record.keyProtection ?? "passphrase";

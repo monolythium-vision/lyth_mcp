@@ -45,6 +45,7 @@ Legend:
 - [x] Local receipts for drafted, signed, submitted, and failed MCP operations.
 - [x] Explicit low-value agent wallet tools with purpose, caps, pause, drain, delete, and funding request.
 - [x] MCP self-check and Markdown dashboard for text/TUI-style clients.
+- [x] Transfer preflight, RPC health scoring, tx watcher, and bucketed low-value accounting.
 - [x] Local addressbook with named-recipient transfer resolution.
 - [x] Demo vendor registry with pizza, flight, plumber, gift-card, and legal-review examples.
 - [x] Draft runbooks for payment, service booking, escrow, trade, policy, receipt, and vendor-rating flows.
@@ -72,12 +73,13 @@ Whitepaper refs: §10, §24.10, §27.6, §29.1.
   - Tools: `tx_outbox_list`, `tx_outbox_get`, `tx_outbox_retry`, `tx_outbox_forget`.
   - Store signed payload, from, to, amount, nonce, route, created time, runbook hash, policy snapshot, and broadcast attempts.
   - Prevent repeated rebuild/re-sign loops after transient mempool or RPC failures.
-- [ ] **MCP** Split low-value accounting into `reserved`, `submitted`, `confirmed`, `failed`, and `expired`.
+- [x] **MCP** Split low-value accounting into `reserved`, `submitted`, `confirmed`, `failed`, and `expired`.
   - Keep the conservative rule that signed payloads reserve allowance.
+  - Track allowance per agent wallet, not just globally.
+- [ ] **MCP** Add low-value reservation expiry and manual release.
   - Add expiry/garbage-collection for old unsubmitted payloads.
   - Add a manual user-approved release flow for stale reservations.
-  - Track allowance per agent wallet, not just globally.
-- [ ] **MCP** Add preflight checks before signing.
+- [x] **MCP** Add preflight checks before signing.
   - Chain id and network match.
   - Wallet balance covers amount + fee.
   - Nonce is current.
@@ -86,11 +88,11 @@ Whitepaper refs: §10, §24.10, §27.6, §29.1.
   - Encryption key epoch is current.
   - Policy allows the spend.
   - Recipient resolves cleanly.
-- [ ] **MCP** Add RPC node health scoring and endpoint quarantine.
+- [x] **MCP** Add RPC node health scoring and endpoint quarantine.
   - Track response latency, sync lag, method failures, mempool decryption failures, stale encryption keys, and bad chain id.
   - Route write attempts away from bad nodes.
   - Expose `rpc_health` and include selected endpoint rationale in all signing responses.
-- [ ] **MCP** Add pending transaction watcher.
+- [x] **MCP** Add pending transaction watcher.
   - Tools: `tx_watch`, `tx_status_summary`.
   - Poll `tx_lookup`, receipt, nonce, and account balance deltas.
   - Return `drafted`, `signed`, `submitted`, `pending`, `confirmed`, `failed`, `not_found`, `expired`.

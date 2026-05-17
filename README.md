@@ -170,11 +170,13 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | Tool | Purpose |
 |---|---|
 | `chain_status` | Probe RPC endpoints and return chain, round, mempool, indexer, and sync status |
+| `rpc_health` | Score configured RPC endpoints for read/write readiness |
 | `mcp_self_check` | Check install/config/store/RPC health |
 | `account_overview` | Get balance, nonce, label, profile, and flow for an address |
 | `recent_transactions` | Read recent transactions from `lyth_txFeed` |
 | `tx_lookup` | Look up status, receipt, transaction, and decoded view by tx hash |
 | `tx_status_summary` | Summarize status by tx hash or outbox id |
+| `tx_watch` | Poll a tx hash or outbox id until confirmed, failed, or attempts are exhausted |
 | `search_chain` | Search addresses, hashes, blocks, clusters, and labels |
 | `markets` | List live CLOB markets or inspect one market with optional book/trades |
 | `api_get` | Low-level read-only helper for `/api/v1` |
@@ -206,6 +208,8 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `wallet_setup` | Create a local encrypted PQM-1/ML-DSA-65 agent wallet |
 | `wallet_import` | Import an existing PQM-1 mnemonic into the encrypted store |
 | `wallet_list` | List local wallets and low-value policy status |
+| `wallet_low_value_accounting` | Show reserved/submitted/confirmed/failed/expired low-value buckets |
+| `wallet_preflight_transfer` | Check chain id, balance, nonce, RPC health, encryption key, and policy before signing |
 | `agent_wallet_create` | Create an explicit low-value agent operating wallet with purpose and caps |
 | `agent_wallet_fund_request` | Draft a funding request for an agent wallet |
 | `agent_wallet_limits` | Update an agent wallet's local caps and metadata |
@@ -334,7 +338,7 @@ Named contacts can be stored in the local addressbook and then used directly as 
 }
 ```
 
-Amounts above the low-value cap are blocked unless the wallet was passphrase-protected and the passphrase is supplied. Low-value accounting is reserved when the MCP creates a signed payload, not when final settlement is observed, because a signed payload can be submitted later. If broadcast fails, retry the returned `built.signed.encryptedEnvelopeHex` with `submit_signed_transaction`; do not rebuild the transfer unless you intentionally want a new signed payload and a new low-value reservation.
+Amounts above the low-value cap are blocked unless the wallet was passphrase-protected and the passphrase is supplied. Low-value accounting is reserved when the MCP creates a signed payload, not when final settlement is observed, because a signed payload can be submitted later. Broadcast acceptance moves the amount from `reserved` to `submitted`; `tx_status_summary` or `tx_watch` moves it to `confirmed` or `failed` once a receipt is observed. If broadcast fails, retry the returned outbox entry; do not rebuild the transfer unless you intentionally want a new signed payload and a new low-value reservation.
 
 Signed payloads are now also written to the local outbox. Prefer retrying with `tx_outbox_retry`:
 
@@ -345,6 +349,20 @@ Signed payloads are now also written to the local outbox. Prefer retrying with `
 ```
 
 Use `mcp_dashboard` when you want a Claude Code-friendly Markdown view of wallets, outbox entries, and receipts.
+
+Before signing a payment, the MCP now runs transfer preflight checks. You can call the same checks directly:
+
+```json
+{
+  "walletName": "pizza-agent",
+  "to": "Neo",
+  "amount": "0.1",
+  "sign": true,
+  "allowLowValueSigning": true
+}
+```
+
+Use `rpc_health` to see which RPC endpoint will be preferred for writes.
 
 ## Example: Pizza Payment Runbook
 

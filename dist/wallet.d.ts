@@ -21,8 +21,24 @@ export interface LowValuePolicy {
     dailyLimit?: string;
     day?: string;
     spentToday?: string;
+    reservedToday?: string;
+    submittedToday?: string;
+    confirmedToday?: string;
+    failedToday?: string;
+    expiredToday?: string;
     configuredAt: string;
     encryptedMnemonic: EncryptedPayload;
+}
+export type LowValueAccountingBucket = "reserved" | "submitted" | "confirmed" | "failed" | "expired";
+export interface LowValueAccountingSummary {
+    day: string;
+    reserved: string;
+    submitted: string;
+    confirmed: string;
+    failed: string;
+    expired: string;
+    totalLocked: string;
+    remainingToday?: string;
 }
 export interface AgentWalletMetadata {
     purpose?: string;
@@ -56,7 +72,9 @@ export interface WalletSummary {
     algorithm: WalletRecord["algorithm"];
     keyProtection: "passphrase" | "local_machine_key";
     createdAt: string;
-    lowValue?: Omit<LowValuePolicy, "encryptedMnemonic">;
+    lowValue?: Omit<LowValuePolicy, "encryptedMnemonic"> & {
+        accounting?: LowValueAccountingSummary;
+    };
     agent?: AgentWalletMetadata;
 }
 export interface BuiltTransfer {
@@ -86,6 +104,7 @@ export interface BuiltTransfer {
     lowValuePolicy?: {
         used: boolean;
         remainingToday?: string;
+        accounting?: LowValueAccountingSummary;
         warning?: string;
     };
 }
@@ -177,4 +196,11 @@ export declare function encryptionKeyFromRpc(result: {
     epoch: number | string;
     encapsulationKey: string;
 }): EncryptionKey;
+export declare function moveLowValueAccounting(args: {
+    walletName: string;
+    amount: string;
+    from: LowValueAccountingBucket;
+    to: LowValueAccountingBucket;
+}): Promise<LowValueAccountingSummary | null>;
+export declare function summarizeLowValueAccounting(policy: Omit<LowValuePolicy, "encryptedMnemonic">): LowValueAccountingSummary;
 export declare function unitsToDecimal(value: bigint, decimals?: number): string;

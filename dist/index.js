@@ -19,7 +19,7 @@ import { z } from "zod";
 import { addressbookInfo, listAddressbookContacts, removeAddressbookContact, resolveAddressbookContact, upsertAddressbookContact, } from "./addressbook.js";
 import { addOutboxEntry, forgetOutboxEntry, getOutboxEntry, listOutboxEntries, outboxInfo, recordOutboxAttempt, updateOutboxStatus, } from "./outbox.js";
 import { addReceipt, getReceipt, listReceipts, receiptInfo, } from "./receipts.js";
-import { buildTransfer, configureLowValuePolicy, createWallet, deleteWallet, encryptionKeyFromRpc, exportMnemonic, importWallet, listWallets, unitsToDecimal, updateAgentWalletMetadata, walletStoreInfo, } from "./wallet.js";
+import { buildTransfer, configureLowValuePolicy, createWallet, deleteWallet, encryptionKeyFromRpc, exportMnemonic, importWallet, listWallets, moveLowValueAccounting, unitsToDecimal, updateAgentWalletMetadata, walletStoreInfo, } from "./wallet.js";
 const DEFAULT_CHAIN_ID = 69420;
 const DEFAULT_NETWORK = "testnet-69420";
 const DEFAULT_RPCS = [
@@ -68,6 +68,9 @@ function compactWallet(wallet) {
 }
 function errorText(message) {
     return { content: [{ type: "text", text: message }], isError: true };
+}
+function errorJson(value) {
+    return { content: [{ type: "text", text: truncate(value) }], isError: true };
 }
 function isHex(value) {
     return /^0x[0-9a-fA-F]*$/.test(value);
@@ -224,6 +227,80 @@ async function probeEndpoint(endpoint) {
         };
     }
 }
+async function scoreEndpoint(endpoint) {
+    const probe = await probeEndpoint(endpoint);
+    const checks = {};
+    const warnings = [];
+    let score = probe.ok ? 100 : 0;
+    if (!probe.ok) {
+        warnings.push("chain id/block probe failed");
+    }
+    if (probe.latencyMs > 2_000) {
+        score -= 10;
+        warnings.push("high latency");
+    }
+    const [gasPrice, mempool, sync, encryptionKey] = await Promise.allSettled([
+        probe.ok ? rpcCall(endpoint, "eth_gasPrice", []) : Promise.reject(new Error("probe failed")),
+        probe.ok ? rpcCall(endpoint, "lyth_mempoolStatus", []) : Promise.reject(new Error("probe failed")),
+        probe.ok ? rpcCall(endpoint, "lyth_syncStatus", []) : Promise.reject(new Error("probe failed")),
+        probe.ok ? rpcCall(endpoint, "lyth_getEncryptionKey", []) : Promise.reject(new Error("probe failed")),
+    ]);
+    if (gasPrice.status === "fulfilled") {
+        checks.gasPrice = gasPrice.value;
+    }
+    else {
+        score -= 10;
+        checks.gasPrice = { error: gasPrice.reason?.message ?? String(gasPrice.reason) };
+        warnings.push("gas price unavailable");
+    }
+    if (mempool.status === "fulfilled") {
+        checks.mempool = mempool.value;
+    }
+    else {
+        score -= 25;
+        checks.mempool = { error: mempool.reason?.message ?? String(mempool.reason) };
+        warnings.push("mempool status unavailable");
+    }
+    if (sync.status === "fulfilled") {
+        checks.sync = sync.value;
+    }
+    else {
+        score -= 15;
+        checks.sync = { error: sync.reason?.message ?? String(sync.reason) };
+        warnings.push("sync status unavailable");
+    }
+    if (encryptionKey.status === "fulfilled") {
+        checks.encryptionKey = encryptionKey.value;
+    }
+    else {
+        score -= 25;
+        checks.encryptionKey = { error: encryptionKey.reason?.message ?? String(encryptionKey.reason) };
+        warnings.push("encryption key unavailable");
+    }
+    const normalizedScore = Math.max(0, Math.min(100, score));
+    return {
+        ...probe,
+        score: normalizedScore,
+        writeReady: probe.ok && normalizedScore >= 70 && encryptionKey.status === "fulfilled",
+        quarantined: !probe.ok || normalizedScore < 50,
+        warnings,
+        checks,
+    };
+}
+async function rpcHealth() {
+    const endpoints = await Promise.all(CONFIGURED_RPCS.map(scoreEndpoint));
+    const sorted = [...endpoints].sort((a, b) => {
+        const heightA = "height" in a && typeof a.height === "string" ? BigInt(a.height) : 0n;
+        const heightB = "height" in b && typeof b.height === "string" ? BigInt(b.height) : 0n;
+        return b.score - a.score || Number(heightB - heightA) || a.latencyMs - b.latencyMs;
+    });
+    return {
+        checkedAt: new Date().toISOString(),
+        selectedRead: sorted.find((endpoint) => endpoint.ok)?.endpoint ?? null,
+        selectedWrite: sorted.find((endpoint) => endpoint.writeReady)?.endpoint ?? null,
+        endpoints: sorted,
+    };
+}
 async function firstReachableEndpoint() {
     const probes = await Promise.all(CONFIGURED_RPCS.map(probeEndpoint));
     const selected = probes
@@ -233,6 +310,13 @@ async function firstReachableEndpoint() {
         throw new Error(`no reachable Monolythium RPC for chain ${CHAIN_ID}: ${safeStringify(probes)}`);
     }
     return selected.endpoint;
+}
+async function firstWritableEndpoint() {
+    const health = await rpcHealth();
+    if (!health.selectedWrite) {
+        throw new Error(`no writable Monolythium RPC for chain ${CHAIN_ID}: ${safeStringify(health.endpoints)}`);
+    }
+    return health.selectedWrite;
 }
 function runbookCatalogue() {
     return [
@@ -655,11 +739,20 @@ async function txStatusSummary(args) {
         rpcCall(endpoint, "eth_getTransactionByHash", [txHash]),
     ]);
     let derived = "submitted";
+    let lowValueAccounting = null;
     if (receipt.status === "fulfilled" && receipt.value) {
         const receiptObject = receipt.value;
         derived = receiptObject?.status === "0x0" ? "failed" : "confirmed";
         if (outbox) {
             await updateOutboxStatus(outbox.id, derived, txHash);
+            if (outbox.lowValueReserved && outbox.walletName && outbox.amount && outbox.status === "submitted") {
+                lowValueAccounting = await moveLowValueAccounting({
+                    walletName: outbox.walletName,
+                    amount: outbox.amount,
+                    from: "submitted",
+                    to: derived === "confirmed" ? "confirmed" : "failed",
+                });
+            }
         }
     }
     else if (tx.status === "fulfilled" && tx.value === null) {
@@ -670,9 +763,129 @@ async function txStatusSummary(args) {
         txHash,
         outbox,
         derived,
+        lowValueAccounting,
         status: status.status === "fulfilled" ? status.value : { error: status.reason?.message ?? String(status.reason) },
         receipt: receipt.status === "fulfilled" ? receipt.value : { error: receipt.reason?.message ?? String(receipt.reason) },
         transaction: tx.status === "fulfilled" ? tx.value : { error: tx.reason?.message ?? String(tx.reason) },
+    };
+}
+async function preflightTransfer(args) {
+    const violations = [];
+    const warnings = [];
+    const checks = {};
+    const endpointHealth = await scoreEndpoint(args.endpoint);
+    checks.endpoint = endpointHealth;
+    if (!endpointHealth.ok) {
+        violations.push(`RPC endpoint is not healthy for chain ${CHAIN_ID}`);
+    }
+    if (args.sign && !endpointHealth.writeReady) {
+        violations.push("RPC endpoint is not write-ready for encrypted signing/submission");
+    }
+    if (!isWireAddress(args.to)) {
+        violations.push("recipient must be a 0x wire address");
+    }
+    const [chainIdResult, balanceResult, nonceResult, encryptionResult] = await Promise.allSettled([
+        rpcCall(args.endpoint, "eth_chainId", []),
+        rpcCall(args.endpoint, "eth_getBalance", [args.from, "latest"]),
+        rpcCall(args.endpoint, "eth_getTransactionCount", [args.from, "latest"]),
+        args.sign ? rpcCall(args.endpoint, "lyth_getEncryptionKey", []) : Promise.resolve(null),
+    ]);
+    if (chainIdResult.status === "fulfilled") {
+        const liveChainId = parseQuantity(chainIdResult.value);
+        checks.chainId = liveChainId.toString();
+        if (liveChainId !== BigInt(CHAIN_ID)) {
+            violations.push(`chain id mismatch: expected ${CHAIN_ID}, got ${liveChainId.toString()}`);
+        }
+    }
+    else {
+        violations.push(`chain id check failed: ${chainIdResult.reason?.message ?? String(chainIdResult.reason)}`);
+    }
+    if (balanceResult.status === "fulfilled") {
+        const balance = parseQuantity(balanceResult.value);
+        const feeCeiling = args.gasLimit * args.maxFeePerGas;
+        const required = args.amountUnits + feeCeiling;
+        checks.balance = {
+            balance: unitsToDecimal(balance),
+            amount: args.amount,
+            estimatedFeeCeiling: unitsToDecimal(feeCeiling),
+            required: unitsToDecimal(required),
+            remainingAfterCeiling: balance >= required ? unitsToDecimal(balance - required) : "0",
+        };
+        if (balance < required) {
+            violations.push(`balance ${unitsToDecimal(balance)} LYTH is below amount + fee ceiling ${unitsToDecimal(required)} LYTH`);
+        }
+    }
+    else {
+        violations.push(`balance check failed: ${balanceResult.reason?.message ?? String(balanceResult.reason)}`);
+    }
+    if (nonceResult.status === "fulfilled") {
+        const liveNonce = parseQuantity(nonceResult.value);
+        checks.nonce = {
+            live: liveNonce.toString(),
+            requested: args.nonce?.toString() ?? liveNonce.toString(),
+        };
+        if (args.nonce !== undefined && args.nonce < liveNonce) {
+            violations.push(`nonce ${args.nonce.toString()} is lower than live nonce ${liveNonce.toString()}`);
+        }
+        if (args.nonce !== undefined && args.nonce > liveNonce) {
+            warnings.push(`nonce ${args.nonce.toString()} is higher than live nonce ${liveNonce.toString()}; transaction may wait for earlier nonce`);
+        }
+    }
+    else {
+        violations.push(`nonce check failed: ${nonceResult.reason?.message ?? String(nonceResult.reason)}`);
+    }
+    if (args.sign && encryptionResult.status !== "fulfilled") {
+        violations.push(`encryption key check failed: ${encryptionResult.reason?.message ?? String(encryptionResult.reason)}`);
+    }
+    const wallet = (await listWallets()).find((item) => item.name === args.walletName);
+    if (!wallet) {
+        violations.push(`wallet '${args.walletName}' not found`);
+    }
+    else {
+        checks.wallet = compactWallet(wallet);
+        const agent = wallet.agent;
+        if (agent?.paused && !args.allowPausedAgent) {
+            violations.push(`agent wallet '${args.walletName}' is paused`);
+        }
+        if (agent?.expiresAt && Date.parse(agent.expiresAt) < Date.now()) {
+            violations.push(`agent wallet '${args.walletName}' expired at ${agent.expiresAt}`);
+        }
+        if (agent?.maxBalance && balanceResult.status === "fulfilled") {
+            const balance = parseQuantity(balanceResult.value);
+            if (balance > decimalToUnits(agent.maxBalance)) {
+                warnings.push(`wallet balance exceeds configured maxBalance ${agent.maxBalance} LYTH`);
+            }
+        }
+        if (args.sign && !args.passphrase && args.allowLowValueSigning) {
+            const low = wallet.lowValue;
+            if (!low?.enabled) {
+                warnings.push("low-value signing is not enabled; signing will require passphrase/local-key permission");
+            }
+            else {
+                if (low.maxAmount && args.amountUnits > decimalToUnits(low.maxAmount)) {
+                    violations.push(`amount exceeds low-value maxAmount ${low.maxAmount} LYTH`);
+                }
+                if (low.accounting?.remainingToday && args.amountUnits > decimalToUnits(low.accounting.remainingToday)) {
+                    violations.push(`amount exceeds low-value remaining daily allowance ${low.accounting.remainingToday} LYTH`);
+                }
+            }
+        }
+    }
+    return {
+        ok: violations.length === 0,
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        endpoint: args.endpoint,
+        walletName: args.walletName,
+        from: args.from,
+        to: args.to,
+        amount: args.amount,
+        gasLimit: args.gasLimit.toString(),
+        maxFeePerGas: args.maxFeePerGas.toString(),
+        checkedAt: new Date().toISOString(),
+        violations,
+        warnings,
+        checks,
     };
 }
 const runbookEnum = z.enum([
@@ -725,13 +938,13 @@ server.tool("chain_status", "Probe Monolythium live RPC endpoints and return cha
         sync: sync.status === "fulfilled" ? sync.value : { error: sync.reason?.message ?? String(sync.reason) },
     });
 });
+server.tool("rpc_health", "Score configured Monolythium RPC endpoints for read/write readiness.", {}, async () => {
+    return text(await rpcHealth());
+});
 server.tool("mcp_self_check", "Check MCP install, config, stores, and RPC reachability.", {}, async () => {
-    const probes = await Promise.all(CONFIGURED_RPCS.map(probeEndpoint));
-    const selected = probes
-        .filter((probe) => probe.ok)
-        .sort((a, b) => Number(BigInt(b.height ?? "0") - BigInt(a.height ?? "0")) || a.latencyMs - b.latencyMs)[0];
+    const health = await rpcHealth();
     return text({
-        ok: Boolean(selected),
+        ok: Boolean(health.selectedRead),
         checkedAt: new Date().toISOString(),
         package: {
             name: "lyth-mcp",
@@ -743,8 +956,9 @@ server.tool("mcp_self_check", "Check MCP install, config, stores, and RPC reacha
         submitEnabled: SUBMIT_ENABLED,
         rpc: {
             configured: CONFIGURED_RPCS,
-            selected: selected?.endpoint ?? null,
-            probes,
+            selectedRead: health.selectedRead,
+            selectedWrite: health.selectedWrite,
+            endpoints: health.endpoints,
         },
         stores: {
             wallet: await walletStoreInfo(),
@@ -866,6 +1080,72 @@ server.tool("wallet_list", "List local MCP wallets and low-value signing policy 
         store: await walletStoreInfo(),
         wallets: await listWallets(),
     });
+});
+server.tool("wallet_low_value_accounting", "Show per-wallet low-value allowance buckets: reserved, submitted, confirmed, failed, and expired.", {
+    name: z.string().optional().describe("Wallet name. Omit to list all low-value wallets."),
+}, async ({ name }) => {
+    const wallets = await listWallets();
+    const filtered = name ? wallets.filter((wallet) => wallet.name === name) : wallets;
+    if (name && filtered.length === 0) {
+        return errorText(`wallet '${name}' not found`);
+    }
+    return text({
+        wallets: filtered.map((wallet) => ({
+            name: wallet.name,
+            address: wallet.address,
+            lowValue: wallet.lowValue ?? null,
+        })),
+        note: "reserved means signed but not yet submitted; submitted means broadcast accepted; confirmed/failed update after tx_status_summary or tx_watch observes a receipt.",
+    });
+});
+server.tool("wallet_preflight_transfer", "Run transfer safety checks before signing: chain id, balance, nonce, RPC write health, encryption key, and local policy.", {
+    walletName: z.string().min(1),
+    to: z.string().describe("0x recipient address or exact addressbook contact name."),
+    amount: z.string().describe("LYTH amount, e.g. 1.5."),
+    passphrase: z.string().min(12).optional(),
+    sign: z.boolean().optional().describe("Whether the caller intends to sign. Default true."),
+    allowLowValueSigning: z.boolean().optional().describe("Whether low-value signing may be used. Default true."),
+    gasLimit: z.string().optional().describe("Hex or decimal gas limit. Default 21000."),
+    maxFeePerGas: z.string().optional().describe("Hex or decimal fee. Defaults to eth_gasPrice or 1 gwei fallback."),
+    nonce: z.string().optional().describe("Hex or decimal nonce. Defaults to live eth_getTransactionCount."),
+}, async ({ walletName, to, amount, passphrase, sign, allowLowValueSigning, gasLimit, maxFeePerGas, nonce }) => {
+    const recipient = await resolveRecipient(to);
+    if (!recipient) {
+        return errorJson({ ok: false, violations: ["to must be a 0x wire address or exact addressbook contact name"] });
+    }
+    const shouldSign = sign ?? true;
+    const endpoint = shouldSign ? await firstWritableEndpoint() : await firstReachableEndpoint();
+    const wallet = (await listWallets()).find((item) => item.name === walletName);
+    if (!wallet) {
+        return errorJson({ ok: false, violations: [`wallet '${walletName}' not found`] });
+    }
+    let fee = maxFeePerGas ? parseFlexibleBigint(maxFeePerGas) : 1000000000n;
+    if (!maxFeePerGas) {
+        try {
+            fee = parseQuantity(await rpcCall(endpoint, "eth_gasPrice", []));
+        }
+        catch {
+            fee = 1000000000n;
+        }
+    }
+    const resolvedNonce = nonce
+        ? parseFlexibleBigint(nonce)
+        : parseQuantity(await rpcCall(endpoint, "eth_getTransactionCount", [wallet.address, "latest"]));
+    const preflight = await preflightTransfer({
+        endpoint,
+        walletName,
+        from: wallet.address,
+        to: recipient.address,
+        amount,
+        amountUnits: decimalToUnits(amount),
+        gasLimit: gasLimit ? parseFlexibleBigint(gasLimit) : 21000n,
+        maxFeePerGas: fee,
+        nonce: resolvedNonce,
+        sign: shouldSign,
+        allowLowValueSigning: shouldSign ? allowLowValueSigning ?? true : false,
+        passphrase,
+    });
+    return preflight.ok ? text({ recipient, preflight }) : errorJson({ recipient, preflight });
 });
 server.tool("agent_wallet_create", "Create an explicit low-value agent operating wallet with user-approved purpose and caps.", {
     name: z.string().min(1).describe("Local agent wallet name, e.g. pizza-agent."),
@@ -1054,7 +1334,8 @@ server.tool("agent_wallet_drain", "Prepare and optionally sign a transfer that d
     if (!recipient) {
         return errorText("to must be a 0x wire address or exact addressbook contact name");
     }
-    const endpoint = await firstReachableEndpoint();
+    const shouldSign = sign ?? true;
+    const endpoint = shouldSign ? await firstWritableEndpoint() : await firstReachableEndpoint();
     const wallet = (await listWallets()).find((item) => item.name === name);
     if (!wallet) {
         return errorText(`wallet '${name}' not found`);
@@ -1074,11 +1355,28 @@ server.tool("agent_wallet_drain", "Prepare and optionally sign a transfer that d
         return errorText("wallet balance is too low to drain after estimated fee");
     }
     const resolvedNonce = parseQuantity(await rpcCall(endpoint, "eth_getTransactionCount", [wallet.address, "latest"]));
-    const shouldSign = sign ?? true;
+    const amountDecimal = unitsToDecimal(amountUnits);
+    const preflight = await preflightTransfer({
+        endpoint,
+        walletName: name,
+        from: wallet.address,
+        to: recipient.address,
+        amount: amountDecimal,
+        amountUnits,
+        gasLimit,
+        maxFeePerGas: fee,
+        nonce: resolvedNonce,
+        sign: shouldSign,
+        allowLowValueSigning: false,
+        allowPausedAgent: true,
+        passphrase,
+    });
+    if (!preflight.ok) {
+        return errorJson({ recipient, preflight });
+    }
     const encryptionKey = shouldSign
         ? encryptionKeyFromRpc(await rpcCall(endpoint, "lyth_getEncryptionKey", []))
         : undefined;
-    const amountDecimal = unitsToDecimal(amountUnits);
     const built = await buildTransfer({
         walletName: name,
         to: recipient.address,
@@ -1156,12 +1454,13 @@ server.tool("agent_wallet_drain", "Prepare and optionally sign a transfer that d
         txHash: typeof submitted?.txHash === "string" ? submitted.txHash : undefined,
         payloadHash: outboxEntry?.payloadHash,
         endpoint,
-        result: { submitted, wallet: compactWallet(paused) },
+        result: { submitted, wallet: compactWallet(paused), preflight },
         error: broadcastError?.message,
     });
     return text({
         endpoint,
         recipient,
+        preflight,
         wallet: compactWallet(paused),
         built,
         outbox: outboxEntry,
@@ -1266,13 +1565,13 @@ server.tool("wallet_build_transfer", "Build a native LYTH transfer from a stored
     if (!recipient) {
         return errorText("to must be a 0x wire address or exact addressbook contact name");
     }
-    const endpoint = await firstReachableEndpoint();
+    const shouldSign = sign ?? true;
+    const endpoint = shouldSign ? await firstWritableEndpoint() : await firstReachableEndpoint();
     const wallets = await listWallets();
     const wallet = wallets.find((w) => w.name === walletName);
     if (!wallet) {
         return errorText(`wallet '${walletName}' not found`);
     }
-    const shouldSign = sign ?? true;
     const resolvedNonce = nonce ? parseFlexibleBigint(nonce) : parseQuantity(await rpcCall(endpoint, "eth_getTransactionCount", [wallet.address, "latest"]));
     let fee = maxFeePerGas ? parseFlexibleBigint(maxFeePerGas) : 1000000000n;
     if (!maxFeePerGas) {
@@ -1284,16 +1583,35 @@ server.tool("wallet_build_transfer", "Build a native LYTH transfer from a stored
         }
     }
     const priority = maxPriorityFeePerGas ? parseFlexibleBigint(maxPriorityFeePerGas) : fee;
+    const amountUnits = decimalToUnits(amount);
+    const resolvedGasLimit = gasLimit ? parseFlexibleBigint(gasLimit) : 21000n;
+    const preflight = await preflightTransfer({
+        endpoint,
+        walletName,
+        from: wallet.address,
+        to: recipient.address,
+        amount,
+        amountUnits,
+        gasLimit: resolvedGasLimit,
+        maxFeePerGas: fee,
+        nonce: resolvedNonce,
+        sign: shouldSign,
+        allowLowValueSigning: shouldSign ? allowLowValueSigning ?? true : false,
+        passphrase,
+    });
+    if (!preflight.ok) {
+        return errorJson({ recipient, preflight });
+    }
     const encryptionKey = shouldSign
         ? encryptionKeyFromRpc(await rpcCall(endpoint, "lyth_getEncryptionKey", []))
         : undefined;
     const built = await buildTransfer({
         walletName,
         to: recipient.address,
-        amountUnits: decimalToUnits(amount),
+        amountUnits,
         chainId: CHAIN_ID,
         nonce: resolvedNonce,
-        gasLimit: gasLimit ? parseFlexibleBigint(gasLimit) : 21000n,
+        gasLimit: resolvedGasLimit,
         maxFeePerGas: fee,
         maxPriorityFeePerGas: priority,
         passphrase,
@@ -1318,6 +1636,7 @@ server.tool("wallet_build_transfer", "Build a native LYTH transfer from a stored
             asset: "LYTH",
             nonce: toQuantity(resolvedNonce),
             policySnapshot: built.lowValuePolicy ?? wallet.lowValue,
+            lowValueReserved: built.lowValuePolicy?.used === true,
             note: "Created by wallet_build_transfer. Retry this payload from the outbox instead of rebuilding after transient broadcast failure.",
         })
         : null;
@@ -1354,6 +1673,9 @@ server.tool("wallet_build_transfer", "Build a native LYTH transfer from a stored
                         ok: true,
                         txHash,
                     });
+                    if (outboxEntry.lowValueReserved && outboxEntry.status === "signed") {
+                        await moveLowValueAccounting({ walletName, amount, from: "reserved", to: "submitted" });
+                    }
                 }
             }
             catch (err) {
@@ -1391,12 +1713,13 @@ server.tool("wallet_build_transfer", "Build a native LYTH transfer from a stored
         txHash: typeof submitted?.txHash === "string" ? submitted.txHash : undefined,
         payloadHash: outboxEntry?.payloadHash,
         endpoint,
-        result: submitted ?? { signed: Boolean(built.signed), broadcastRequested: Boolean(broadcast) },
+        result: submitted ?? { signed: Boolean(built.signed), broadcastRequested: Boolean(broadcast), preflight },
         error: broadcastError?.message,
     });
     return text({
         endpoint,
         recipient,
+        preflight,
         built,
         outbox: outboxEntry,
         receipt,
@@ -1554,13 +1877,18 @@ server.tool("submit_signed_transaction", "Broadcast an already-signed transactio
     if (!SUBMIT_ENABLED) {
         return errorText("Broadcast disabled. Set LYTH_MCP_ENABLE_SUBMIT=1 to allow this MCP to submit already-signed payloads.");
     }
-    const endpoint = await firstReachableEndpoint();
+    const entry = outboxId ? await getOutboxEntry(outboxId) : null;
+    const endpoint = await firstWritableEndpoint();
     const method = kind === "eth_raw" ? "eth_sendRawTransaction" : "lyth_submitEncrypted";
     try {
         const txHash = await rpcCall(endpoint, method, [payloadHex]);
         const outbox = outboxId
             ? await recordOutboxAttempt(outboxId, { at: new Date().toISOString(), endpoint, method, ok: true, txHash })
             : null;
+        let lowValueAccounting = null;
+        if (entry?.lowValueReserved && entry.status === "signed" && entry.walletName && entry.amount) {
+            lowValueAccounting = await moveLowValueAccounting({ walletName: entry.walletName, amount: entry.amount, from: "reserved", to: "submitted" });
+        }
         const receipt = await addReceipt({
             kind: "submit_signed_transaction",
             status: "submitted",
@@ -1571,9 +1899,9 @@ server.tool("submit_signed_transaction", "Broadcast an already-signed transactio
             outboxId,
             txHash,
             endpoint,
-            result: { method, txHash },
+            result: { method, txHash, lowValueAccounting },
         });
-        return text({ endpoint, method, txHash, outbox, receipt });
+        return text({ endpoint, method, txHash, outbox, receipt, lowValueAccounting });
     }
     catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -1608,11 +1936,14 @@ server.tool("tx_outbox_retry", "Retry a signed payload from the local outbox. Re
     if (!SUBMIT_ENABLED) {
         return errorText("Broadcast disabled. Set LYTH_MCP_ENABLE_SUBMIT=1 to retry outbox payloads.");
     }
-    const endpoint = await firstReachableEndpoint();
+    const endpoint = await firstWritableEndpoint();
     const method = outboxMethod(entry.kind);
     try {
         const txHash = await submitPayload(endpoint, entry.kind, entry.payloadHex);
         const outbox = await recordOutboxAttempt(id, { at: new Date().toISOString(), endpoint, method, ok: true, txHash });
+        const lowValueAccounting = entry.lowValueReserved && entry.status === "signed" && entry.walletName && entry.amount
+            ? await moveLowValueAccounting({ walletName: entry.walletName, amount: entry.amount, from: "reserved", to: "submitted" })
+            : null;
         const receipt = await addReceipt({
             kind: "tx_outbox_retry",
             status: "submitted",
@@ -1629,9 +1960,9 @@ server.tool("tx_outbox_retry", "Retry a signed payload from the local outbox. Re
             txHash,
             payloadHash: entry.payloadHash,
             endpoint,
-            result: { method, txHash },
+            result: { method, txHash, lowValueAccounting },
         });
-        return text({ endpoint, method, txHash, outbox, receipt });
+        return text({ endpoint, method, txHash, outbox, receipt, lowValueAccounting });
     }
     catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -1671,6 +2002,41 @@ server.tool("tx_status_summary", "Summarize live transaction status by tx hash o
         return errorText("txHash or outboxId is required");
     }
     return text(await txStatusSummary({ txHash, outboxId }));
+});
+server.tool("tx_watch", "Poll transaction status by tx hash or outbox id until confirmed, failed, or attempts are exhausted.", {
+    txHash: z.string().optional(),
+    outboxId: z.string().optional(),
+    attempts: z.number().min(1).max(30).optional().describe("Default 6."),
+    intervalMs: z.number().min(250).max(10_000).optional().describe("Default 2000."),
+}, async ({ txHash, outboxId, attempts, intervalMs }) => {
+    if (!txHash && !outboxId) {
+        return errorText("txHash or outboxId is required");
+    }
+    const snapshots = [];
+    const maxAttempts = attempts ?? 6;
+    const waitMs = intervalMs ?? 2_000;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const snapshot = await txStatusSummary({ txHash, outboxId });
+        snapshots.push({ attempt, snapshot });
+        const derived = snapshot.derived;
+        if (derived === "confirmed" || derived === "failed") {
+            return text({
+                done: true,
+                final: derived,
+                attempts: attempt,
+                snapshots,
+            });
+        }
+        if (attempt < maxAttempts) {
+            await new Promise((resolve) => setTimeout(resolve, waitMs));
+        }
+    }
+    return text({
+        done: false,
+        final: "pending_or_not_found",
+        attempts: maxAttempts,
+        snapshots,
+    });
 });
 server.tool("receipt_list", "List local MCP receipts for drafted, signed, submitted, confirmed, or failed operations.", {
     status: receiptStatusEnum.optional(),
@@ -1712,7 +2078,7 @@ server.tool("mcp_dashboard", "Render a compact Markdown dashboard for Claude Cod
         "",
         "## Wallets",
         wallets.length
-            ? mdTable(["Name", "Address", "Mode", "Cap", "Daily", "Paused", "Purpose"], wallets.map((wallet) => {
+            ? mdTable(["Name", "Address", "Mode", "Cap", "Daily", "Reserved", "Submitted", "Paused", "Purpose"], wallets.map((wallet) => {
                 const low = wallet.lowValue;
                 const agent = wallet.agent;
                 return [
@@ -1721,6 +2087,8 @@ server.tool("mcp_dashboard", "Render a compact Markdown dashboard for Claude Cod
                     wallet.keyProtection,
                     low?.maxAmount ?? "",
                     low?.dailyLimit ?? "",
+                    low?.accounting?.reserved ?? "",
+                    low?.accounting?.submitted ?? "",
                     agent?.paused ? "yes" : "no",
                     agent?.purpose ?? "",
                 ];

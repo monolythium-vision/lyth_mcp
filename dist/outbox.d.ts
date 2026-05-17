@@ -28,6 +28,7 @@ export interface TxOutboxEntry {
     nonce?: string;
     runbookId?: string;
     policySnapshot?: unknown;
+    lowValueReserved?: boolean;
     txHash?: string;
     attempts: OutboxAttempt[];
     note?: string;
