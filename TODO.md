@@ -59,7 +59,7 @@ The MCP should become the interface an AI agent uses to answer and execute:
 - "Can I deploy or call a Rust/RISC-V contract?"
 - "Can I prove what happened, explain why it failed, and show a receipt?"
 
-The MCP must not become a hidden hot wallet. Every money-moving path requires explicit user approval or a previously configured, auditable, bounded policy.
+The MCP may support explicitly authorized agent hot-wallet behavior for small spending. The agent can create its own wallet, but only after the user approves the wallet purpose, network, funding limit, per-transaction cap, daily/epoch cap, expiry, and recovery/drain path. The MCP must never become a hidden or unrestricted hot wallet: every money-moving path requires explicit user approval or a previously configured, auditable, bounded policy.
 
 ## P0: Reliability And Safety Baseline
 
@@ -73,6 +73,7 @@ Whitepaper refs: §10, §24.10, §27.6, §29.1.
   - Keep the conservative rule that signed payloads reserve allowance.
   - Add expiry/garbage-collection for old unsubmitted payloads.
   - Add a manual user-approved release flow for stale reservations.
+  - Track allowance per agent wallet, not just globally.
 - [ ] **MCP** Add preflight checks before signing.
   - Chain id and network match.
   - Wallet balance covers amount + fee.
@@ -124,6 +125,16 @@ Whitepaper refs: §10, §21.2.1, §24.10, §27.6, §28.5, §30.1.
   - Tool: `agent_create_subaccount`.
   - Link agent address to human deployer/principal.
   - Store principal, purpose, policy, and revocation metadata.
+- [ ] **MCP WALLET** Support explicit agent hot-wallet setup for small spending.
+  - Tools: `agent_wallet_create`, `agent_wallet_fund_request`, `agent_wallet_limits`, `agent_wallet_pause`, `agent_wallet_drain`, `agent_wallet_delete`.
+  - Require user approval before creation.
+  - Capture purpose, network, max balance, per-tx cap, daily/epoch cap, allowed counterparties/categories, expiry, and fallback approval mode.
+  - Generate the agent wallet locally, encrypt the key, and present backup/recovery choices.
+  - Mark these wallets as low-value operating wallets, not custody wallets.
+- [ ] **MCP WALLET** Add agent-wallet funding flow.
+  - Agent can request funds: "Send up to X LYTH/USDC to this agent wallet for task Y; expires at Z."
+  - Funding requires user approval from a principal wallet.
+  - Agent cannot raise its own limits or refill itself without approval.
 - [ ] **CORE SDK WALLET** Support on-chain spending-policy creation/modification/revocation.
   - Tools: `policy_draft`, `policy_validate`, `policy_create`, `policy_update`, `policy_revoke`, `policy_explain`.
   - Support budget caps, per-tx caps, counterparty allowlists, category limits, time windows, expiry, and emergency pause.
@@ -133,9 +144,10 @@ Whitepaper refs: §10, §21.2.1, §24.10, §27.6, §28.5, §30.1.
   - Show exact failing policy clause.
 - [ ] **WALLET** Add wallet handoff support.
   - MCP drafts request; wallet renders and signs.
-  - No private key needs to live inside MCP for normal production usage.
+  - High-value custody does not need to live inside MCP for normal production usage.
+  - Explicit low-value agent wallets may sign locally only within configured limits.
 - [ ] **WALLET** Add passkey-aware thresholds.
-  - Below user-set cap: passkey/keychain.
+  - Below user-set cap: agent hot wallet or passkey/keychain, depending on policy.
   - Above cap: full-key or hardware wallet approval.
 - [ ] **CORE SDK WALLET** Add SLH-DSA emergency-key support.
   - Tools: `emergency_key_status`, `emergency_key_register_draft`, `emergency_key_rotate_draft`.
@@ -438,8 +450,9 @@ Whitepaper refs: §18, §22, §24.2, §26, §27, §29.5, §99.8.
 - [ ] **MCP** Bridge readiness.
   - Route metadata, cooldowns, drain caps, circuit breakers, bridge quotes, bridge status watchers live.
 - [ ] **MCP** Wallet handoff readiness.
-  - Production path does not require MCP-local hot wallet.
-  - MCP-local low-value wallet remains demo/testnet/developer mode.
+  - Production path supports wallet handoff for high-value funds.
+  - MCP-local agent hot-wallet mode is explicit opt-in, capped, revocable, and receipt-covered.
+  - MCP-local low-value wallet remains suitable for agent operating budgets, demos, testnet, and developer workflows.
 - [ ] **MCP** Runbook readiness.
   - Canonical signed/hash-verified runbooks with monitoring and receipts.
 - [ ] **MCP** Security readiness.
@@ -472,7 +485,7 @@ Whitepaper refs: §18, §22, §24.2, §26, §27, §29.5, §99.8.
 - Do not add on-chain governance/voting/tally tools.
 - Do not let private-denominated LYTH interact with commerce, bridges, staking, markets, or contracts.
 - Do not hide bridge/wrapped-asset trust assumptions.
-- Do not make MCP-local hot wallets the production signing architecture.
+- Do not make MCP-local hot wallets an implicit, unrestricted, or high-value production signing architecture.
 
 ## Open Design Questions
 
