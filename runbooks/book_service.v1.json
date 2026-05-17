@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "name": "book_service",
+  "status": "draft_only",
+  "purpose": "Express an agent workflow for booking an external service under a spending policy.",
+  "requiredFields": ["vendorId", "service", "amount", "asset"],
+  "optionalFields": ["deadline", "tip", "deliveryWindow", "refundPolicy", "notes"],
+  "approvalRequired": true,
+  "steps": [
+    "check_policy",
+    "discover_vendor",
+    "confirm_terms",
+    "request_approval",
+    "pay_or_escrow",
+    "record_receipt"
+  ]
+}
+

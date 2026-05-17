@@ -1,0 +1,235 @@
+{
+  "schemaVersion": 1,
+  "network": "testnet-69420",
+  "disclaimer": "Demo registry for local MCP testing only. Addresses are testnet placeholders and vendors are not real production integrations.",
+  "vendors": [
+    {
+      "id": "pizza-demo",
+      "displayName": "Pizza Demo Vendor",
+      "category": "food",
+      "address": "0x1111111111111111111111111111111111111111",
+      "acceptedAssets": ["LYTH"],
+      "maxOrderAmount": "100",
+      "serviceTags": ["pizza", "delivery", "demo"],
+      "fulfillment": {
+        "type": "delivery_demo",
+        "etaMinutes": 30,
+        "requiredFields": ["deliveryAddress", "phone", "orderNotes"]
+      },
+      "catalog": [
+        {
+          "id": "margherita",
+          "name": "Margherita",
+          "description": "Tomato, mozzarella, basil",
+          "price": "9",
+          "asset": "LYTH"
+        },
+        {
+          "id": "pepperoni",
+          "name": "Pepperoni",
+          "description": "Tomato, mozzarella, pepperoni",
+          "price": "11",
+          "asset": "LYTH"
+        },
+        {
+          "id": "funghi",
+          "name": "Funghi",
+          "description": "Mushrooms, mozzarella, garlic oil",
+          "price": "10",
+          "asset": "LYTH"
+        },
+        {
+          "id": "quattro-formaggi",
+          "name": "Quattro Formaggi",
+          "description": "Mozzarella, gorgonzola, parmesan, provolone",
+          "price": "12.5",
+          "asset": "LYTH"
+        },
+        {
+          "id": "veggie",
+          "name": "Veggie",
+          "description": "Peppers, onion, mushrooms, olives",
+          "price": "10.5",
+          "asset": "LYTH"
+        },
+        {
+          "id": "diavola",
+          "name": "Diavola",
+          "description": "Spicy salami, chili, mozzarella",
+          "price": "12",
+          "asset": "LYTH"
+        },
+        {
+          "id": "bbq-chicken",
+          "name": "BBQ Chicken",
+          "description": "Chicken, BBQ sauce, red onion, mozzarella",
+          "price": "13",
+          "asset": "LYTH"
+        },
+        {
+          "id": "tuna-red-onion",
+          "name": "Tuna Red Onion",
+          "description": "Tuna, red onion, capers, mozzarella",
+          "price": "11.5",
+          "asset": "LYTH"
+        },
+        {
+          "id": "truffle-mushroom",
+          "name": "Truffle Mushroom",
+          "description": "Mushrooms, truffle oil, parmesan",
+          "price": "15",
+          "asset": "LYTH"
+        },
+        {
+          "id": "build-your-own",
+          "name": "Build Your Own",
+          "description": "Base pizza with up to four toppings",
+          "price": "14",
+          "asset": "LYTH"
+        }
+      ],
+      "notes": "Example only. Replace with a real vendor registry before production use."
+    },
+    {
+      "id": "legal-review-demo",
+      "displayName": "Legal Review Demo",
+      "category": "professional_services",
+      "address": "0x2222222222222222222222222222222222222222",
+      "acceptedAssets": ["LYTH"],
+      "maxOrderAmount": "5000",
+      "serviceTags": ["legal", "privacy-policy", "contract-review"],
+      "notes": "Example only."
+    },
+    {
+      "id": "flight-tickets-demo",
+      "displayName": "Flight Tickets Demo Vendor",
+      "category": "travel",
+      "address": "0x3333333333333333333333333333333333333333",
+      "acceptedAssets": ["LYTH"],
+      "maxOrderAmount": "2500",
+      "serviceTags": ["flights", "tickets", "travel", "demo"],
+      "fulfillment": {
+        "type": "booking_demo",
+        "requiredFields": ["passengerName", "email", "routeId", "travelDate", "passportCountry"]
+      },
+      "catalog": [
+        {
+          "id": "ams-lhr-economy",
+          "name": "Amsterdam to London",
+          "description": "One-way economy demo ticket",
+          "price": "180",
+          "asset": "LYTH"
+        },
+        {
+          "id": "ams-ist-economy",
+          "name": "Amsterdam to Istanbul",
+          "description": "One-way economy demo ticket",
+          "price": "260",
+          "asset": "LYTH"
+        },
+        {
+          "id": "jfk-lax-economy",
+          "name": "New York to Los Angeles",
+          "description": "One-way economy demo ticket",
+          "price": "320",
+          "asset": "LYTH"
+        }
+      ],
+      "notes": "Fake flight vendor for MCP runbook testing only. No tickets are issued."
+    },
+    {
+      "id": "plumber-demo",
+      "displayName": "Plumber Demo Vendor",
+      "category": "home_services",
+      "address": "0x4444444444444444444444444444444444444444",
+      "acceptedAssets": ["LYTH"],
+      "maxOrderAmount": "750",
+      "serviceTags": ["plumber", "home-repair", "emergency", "demo"],
+      "fulfillment": {
+        "type": "service_booking_demo",
+        "etaMinutes": 90,
+        "requiredFields": ["serviceAddress", "phone", "issueDescription", "preferredWindow"]
+      },
+      "catalog": [
+        {
+          "id": "leak-inspection",
+          "name": "Leak Inspection",
+          "description": "On-site inspection and quote",
+          "price": "45",
+          "asset": "LYTH"
+        },
+        {
+          "id": "drain-unblock",
+          "name": "Drain Unblock",
+          "description": "Standard drain unclog service",
+          "price": "95",
+          "asset": "LYTH"
+        },
+        {
+          "id": "emergency-callout",
+          "name": "Emergency Callout",
+          "description": "Priority callout with first hour included",
+          "price": "150",
+          "asset": "LYTH"
+        }
+      ],
+      "notes": "Fake service vendor for MCP runbook testing only."
+    },
+    {
+      "id": "coinsbee-giftcards-demo",
+      "displayName": "Coinsbee Gift Cards Demo (Unofficial Sandbox)",
+      "category": "gift_cards",
+      "address": "0x5555555555555555555555555555555555555555",
+      "acceptedAssets": ["LYTH"],
+      "maxOrderAmount": "300",
+      "serviceTags": ["gift-card", "voucher", "coinsbee", "sandbox", "demo"],
+      "integration": {
+        "status": "not_connected",
+        "provider": "Coinsbee",
+        "notes": "Unofficial placeholder metadata only. A real integration needs vendor approval, API credentials, pricing, and fulfillment handling."
+      },
+      "fulfillment": {
+        "type": "digital_code_demo",
+        "requiredFields": ["email", "productId", "denomination"]
+      },
+      "catalog": [
+        {
+          "id": "amazon-25",
+          "name": "Amazon Gift Card 25",
+          "description": "Demo digital gift card",
+          "price": "25",
+          "asset": "LYTH"
+        },
+        {
+          "id": "steam-50",
+          "name": "Steam Gift Card 50",
+          "description": "Demo digital gift card",
+          "price": "50",
+          "asset": "LYTH"
+        },
+        {
+          "id": "apple-25",
+          "name": "Apple Gift Card 25",
+          "description": "Demo digital gift card",
+          "price": "25",
+          "asset": "LYTH"
+        },
+        {
+          "id": "google-play-25",
+          "name": "Google Play Gift Card 25",
+          "description": "Demo digital gift card",
+          "price": "25",
+          "asset": "LYTH"
+        },
+        {
+          "id": "netflix-30",
+          "name": "Netflix Gift Card 30",
+          "description": "Demo digital gift card",
+          "price": "30",
+          "asset": "LYTH"
+        }
+      ],
+      "notes": "Fake gift-card vendor for MCP runbook testing only. It does not call Coinsbee or issue real vouchers."
+    }
+  ]
+}

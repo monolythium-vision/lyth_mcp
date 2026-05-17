@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "name": "pay_vendor",
+  "status": "live_preparable",
+  "purpose": "Prepare a wallet-approved native LYTH payment to a vendor or service.",
+  "requiredFields": ["recipient", "amount", "asset"],
+  "optionalFields": ["vendorId", "memo", "category", "receiptExpected"],
+  "approvalRequired": true,
+  "liveExecution": {
+    "supported": true,
+    "mode": "wallet_approval",
+    "limits": ["native LYTH transfers only in the MVP"]
+  },
+  "steps": [
+    "check_policy",
+    "resolve_vendor",
+    "request_approval",
+    "submit_payment",
+    "record_receipt"
+  ]
+}
+

@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "name": "place_trade",
+  "status": "draft_only",
+  "purpose": "Draft a spot-market order intent for wallet or trading-interface approval.",
+  "requiredFields": ["marketId", "side", "amount", "limitPrice"],
+  "optionalFields": ["maxSlippageBps", "timeInForce", "cancelAfter"],
+  "approvalRequired": true,
+  "steps": [
+    "check_policy",
+    "load_market",
+    "check_slippage",
+    "request_approval",
+    "submit_order",
+    "track_fill"
+  ]
+}
+
