@@ -12,7 +12,6 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,11 +42,27 @@ import {
   type ReceiptStatus,
 } from "./receipts.js";
 import {
+  createOrder,
+  getOrder,
+  listOrders,
+  orderStoreInfo,
+  updateOrder,
+  type OrderStatus,
+} from "./orders.js";
+import {
   diffRunbookContent,
   getCanonicalRunbook,
   listCanonicalRunbooks,
   type CanonicalRunbook,
 } from "./runbooks.js";
+import {
+  getVendor,
+  loadVendorRegistry,
+  quoteVendorOrder,
+  searchVendors,
+  vendorRegistrySummary,
+  type VendorQuote,
+} from "./vendors.js";
 import {
   buildTransfer,
   configureLowValuePolicy,
@@ -940,16 +955,29 @@ function prepareWalletRequest(draft: RunbookDraft, from?: string) {
 }
 
 async function loadVendors() {
-  const raw = await readFile(VENDOR_REGISTRY_PATH, "utf8");
-  const parsed = JSON.parse(raw);
-  const vendors = Array.isArray(parsed) ? parsed : parsed.vendors;
-  if (!Array.isArray(vendors)) {
-    throw new Error("vendor registry must be an array or an object with a vendors array");
-  }
-  const metadata = Array.isArray(parsed)
-    ? {}
-    : Object.fromEntries(Object.entries(parsed).filter(([key]) => key !== "vendors"));
-  return { source: VENDOR_REGISTRY_PATH, ...metadata, vendors };
+  return loadVendorRegistry(VENDOR_REGISTRY_PATH);
+}
+
+async function quoteOrder(args: {
+  vendorId: string;
+  itemId?: string;
+  quantity?: number;
+  asset?: string;
+  fulfillmentFields?: Record<string, unknown>;
+}): Promise<{ registry: Awaited<ReturnType<typeof loadVendorRegistry>>; quote: VendorQuote }> {
+  const registry = await loadVendors();
+  const vendor = getVendor(registry.registry, args.vendorId);
+  return {
+    registry,
+    quote: quoteVendorOrder({
+      registryHash: registry.payloadHash,
+      vendor,
+      itemId: args.itemId,
+      quantity: args.quantity,
+      asset: args.asset,
+      fulfillmentFields: args.fulfillmentFields,
+    }),
+  };
 }
 
 function outboxMethod(kind: OutboxKind): "eth_sendRawTransaction" | "lyth_submitEncrypted" {
@@ -1272,6 +1300,7 @@ const runbookEnum = z.enum([
 
 const outboxStatusEnum = z.enum(["signed", "submitted", "confirmed", "failed", "expired"]);
 const receiptStatusEnum = z.enum(["drafted", "signed", "submitted", "confirmed", "failed"]);
+const orderStatusEnum = z.enum(["created", "payment_prepared", "paid", "fulfilled_demo", "cancelled"]);
 
 const recordSchema = z.record(z.unknown()).optional();
 const policySchema = z.object({
@@ -1341,6 +1370,7 @@ server.tool("mcp_self_check", "Check MCP install, config, stores, and RPC reacha
       addressbook: await addressbookInfo(),
       outbox: await outboxInfo(),
       receipts: await receiptInfo(),
+      orders: await orderStoreInfo(),
       vendorRegistry: VENDOR_REGISTRY_PATH,
       runbookRegistry: RUNBOOK_REGISTRY_PATH,
     },
@@ -2899,11 +2929,13 @@ server.tool(
     const wallets = await listWallets();
     const outbox = await listOutboxEntries({ limit: 10 });
     const receipts = await listReceipts({ limit: 10 });
+    const orders = await listOrders({ limit: 10 });
     const contacts = await listAddressbookContacts();
     const walletInfo = await walletStoreInfo();
     const contactInfo = await addressbookInfo();
     const outboxStore = await outboxInfo();
     const receiptStore = await receiptInfo();
+    const orderStore = await orderStoreInfo();
     const lines = [
       "# Lyth MCP Dashboard",
       "",
@@ -2917,6 +2949,7 @@ server.tool(
           ["Contacts", String(contacts.length), contactInfo.path],
           ["Outbox", String(outboxStore.entryCount), outboxStore.path],
           ["Receipts", String(receiptStore.receiptCount), receiptStore.path],
+          ["Orders", String(orderStore.orderCount), orderStore.path],
         ],
       ),
       "",
@@ -2972,6 +3005,20 @@ server.tool(
               ]),
             )
           : "No receipts.",
+        "",
+        "## Orders",
+        orders.length
+          ? mdTable(
+              ["ID", "Status", "Vendor", "Item", "Amount"],
+              orders.map((order) => [
+                order.id,
+                order.status,
+                order.vendorDisplayName ?? order.vendorId,
+                order.itemName ?? order.itemId ?? "",
+                `${order.amount} ${order.asset}`,
+              ]),
+            )
+          : "No orders.",
       );
     }
     return { content: [{ type: "text" as const, text: lines.join("\n") }] };
@@ -2988,15 +3035,301 @@ server.tool(
   },
   async ({ query, category, limit }) => {
     const registry = await loadVendors();
-    const q = query?.toLowerCase();
-    const c = category?.toLowerCase();
-    const vendors = (registry.vendors as Array<Record<string, unknown>>)
-      .filter((vendor) => {
-        const haystack = safeStringify(vendor).toLowerCase();
-        return (!q || haystack.includes(q)) && (!c || String(vendor.category ?? "").toLowerCase() === c);
-      })
-      .slice(0, limit ?? 10);
-    return text({ ...registry, vendors });
+    return text({
+      registry: vendorRegistrySummary(registry),
+      vendors: searchVendors(registry.registry, { query, category, limit }),
+    });
+  },
+);
+
+server.tool("vendor_registry_info", "Show vendor registry metadata, hashes, signature status, and category summary.", {}, async () => {
+  const registry = await loadVendors();
+  return text(vendorRegistrySummary(registry));
+});
+
+server.tool(
+  "vendor_get",
+  "Get one vendor by id from the configured registry.",
+  {
+    vendorId: z.string().min(1),
+  },
+  async ({ vendorId }) => {
+    const registry = await loadVendors();
+    const vendor = getVendor(registry.registry, vendorId);
+    return text({
+      registry: vendorRegistrySummary(registry),
+      vendor,
+      warning: vendor.fulfillment?.type?.includes("demo")
+        ? "This vendor uses demo fulfillment. No real goods or services are delivered."
+        : undefined,
+    });
+  },
+);
+
+server.tool(
+  "order_quote",
+  "Quote a demo vendor catalog item. This does not create an order or spend funds.",
+  {
+    vendorId: z.string().min(1),
+    itemId: z.string().optional(),
+    quantity: z.number().int().min(1).max(100).optional(),
+    asset: z.string().optional(),
+    fulfillmentFields: recordSchema.describe("Fulfillment fields such as deliveryAddress, email, phone, routeId."),
+  },
+  async ({ vendorId, itemId, quantity, asset, fulfillmentFields }) => {
+    const { registry, quote } = await quoteOrder({ vendorId, itemId, quantity, asset, fulfillmentFields });
+    return text({
+      registry: vendorRegistrySummary(registry),
+      quote,
+      warning: "Quote only. No payment has been prepared and no vendor has been contacted.",
+    });
+  },
+);
+
+server.tool(
+  "order_create",
+  "Create a local demo order from the vendor registry. This does not contact a real vendor or spend funds.",
+  {
+    vendorId: z.string().min(1),
+    itemId: z.string().optional(),
+    quantity: z.number().int().min(1).max(100).optional(),
+    asset: z.string().optional(),
+    fulfillmentFields: recordSchema,
+    notes: z.string().optional(),
+  },
+  async ({ vendorId, itemId, quantity, asset, fulfillmentFields, notes }) => {
+    const { registry, quote } = await quoteOrder({ vendorId, itemId, quantity, asset, fulfillmentFields });
+    const order = await createOrder({
+      network: NETWORK,
+      chainId: CHAIN_ID,
+      vendorId: quote.vendorId,
+      vendorDisplayName: quote.vendorDisplayName,
+      vendorAddress: quote.vendorAddress,
+      itemId: quote.itemId,
+      itemName: quote.itemName,
+      quantity: quote.quantity,
+      amount: quote.amount,
+      asset: quote.asset,
+      registryHash: quote.registryHash,
+      fulfillmentFields,
+      quote: { ...quote, notes },
+    });
+    const receipt = await addReceipt({
+      kind: "order_create",
+      status: "drafted",
+      network: NETWORK,
+      chainId: CHAIN_ID,
+      title: `Created order ${order.id}`,
+      summary: `${quote.vendorDisplayName ?? quote.vendorId}: ${quote.itemName ?? quote.itemId ?? "custom"} (${quote.amount} ${quote.asset})`,
+      to: quote.vendorAddress,
+      amount: quote.amount,
+      asset: quote.asset,
+      result: order,
+    });
+    return text({
+      registry: vendorRegistrySummary(registry),
+      order,
+      receipt,
+      warning: "Local order only. No real vendor was contacted and no payment was sent.",
+    });
+  },
+);
+
+server.tool(
+  "order_pay",
+  "Prepare a pay_vendor runbook and optional wallet request for a local order.",
+  {
+    orderId: z.string().min(1),
+    from: z.string().optional().describe("Optional 0x sender address for prepare_wallet_request."),
+    paymentTxHash: z.string().optional().describe("Optional tx hash to mark the order paid after an external payment."),
+  },
+  async ({ orderId, from, paymentTxHash }) => {
+    const order = await getOrder(orderId);
+    if (order.status === "cancelled") {
+      return errorText(`order '${orderId}' is cancelled`);
+    }
+    const draft = await buildVerifiedRunbookDraft({
+      runbook: "pay_vendor",
+      fields: {
+        recipient: order.vendorAddress,
+        vendorId: order.vendorId,
+        amount: order.amount,
+        asset: order.asset,
+        category: "commerce",
+        memo: `order:${order.id}`,
+      },
+      policy: {
+        maxAmount: order.amount,
+        assetAllowlist: [order.asset],
+        vendorAllowlist: [order.vendorId, order.vendorAddress ?? ""].filter(Boolean),
+        requireHumanApproval: true,
+      },
+    });
+    const prepared = prepareWalletRequest(draft, from);
+    const status: OrderStatus = paymentTxHash ? "paid" : "payment_prepared";
+    const updated = await updateOrder(order.id, {
+      status,
+      payment: {
+        txHash: paymentTxHash,
+        runbookId: draft.id,
+        preparedAt: new Date().toISOString(),
+      },
+    }, {
+      type: status,
+      data: { paymentTxHash, runbookId: draft.id, prepared },
+    });
+    const receipt = await addReceipt({
+      kind: "order_pay",
+      status: paymentTxHash ? "submitted" : "drafted",
+      network: NETWORK,
+      chainId: CHAIN_ID,
+      title: `Payment prepared for order ${order.id}`,
+      summary: `${order.amount} ${order.asset} -> ${order.vendorAddress}`,
+      to: order.vendorAddress,
+      amount: order.amount,
+      asset: order.asset,
+      txHash: paymentTxHash,
+      result: { order: updated, draft, prepared },
+    });
+    return text({
+      order: updated,
+      draft,
+      prepared,
+      receipt,
+      warning: "Payment preparation only unless paymentTxHash was supplied. Use wallet_build_transfer for local MCP wallet signing.",
+    });
+  },
+);
+
+server.tool(
+  "order_mark_paid",
+  "Mark a local order paid after observing or supplying a payment tx hash.",
+  {
+    orderId: z.string().min(1),
+    txHash: z.string().min(1),
+  },
+  async ({ orderId, txHash }) => {
+    const order = await updateOrder(orderId, {
+      status: "paid",
+      payment: {
+        ...(await getOrder(orderId)).payment,
+        txHash,
+      },
+    }, {
+      type: "paid",
+      data: { txHash },
+    });
+    return text({ order });
+  },
+);
+
+server.tool(
+  "order_status",
+  "Get one local order by id.",
+  {
+    orderId: z.string().min(1),
+  },
+  async ({ orderId }) => text(await getOrder(orderId)),
+);
+
+server.tool(
+  "order_list",
+  "List local demo orders.",
+  {
+    status: orderStatusEnum.optional(),
+    vendorId: z.string().optional(),
+    limit: z.number().min(1).max(100).optional(),
+  },
+  async ({ status, vendorId, limit }) => text({
+    store: await orderStoreInfo(),
+    orders: await listOrders({ status: status as OrderStatus | undefined, vendorId, limit }),
+  }),
+);
+
+server.tool(
+  "order_receipt",
+  "Return a local order receipt with event history.",
+  {
+    orderId: z.string().min(1),
+  },
+  async ({ orderId }) => {
+    const order = await getOrder(orderId);
+    return text({
+      receipt: {
+        id: `order_receipt_${order.id}`,
+        order,
+        warning: "Local MCP order receipt only. It is not proof of real-world fulfillment.",
+      },
+    });
+  },
+);
+
+server.tool(
+  "order_cancel",
+  "Cancel a local order if it has not been fulfilled.",
+  {
+    orderId: z.string().min(1),
+    reason: z.string().optional(),
+    confirm: z.literal("CANCEL_ORDER"),
+  },
+  async ({ orderId, reason }) => {
+    const current = await getOrder(orderId);
+    if (current.status === "fulfilled_demo") {
+      return errorText("fulfilled demo orders cannot be cancelled");
+    }
+    const order = await updateOrder(orderId, {
+      status: "cancelled",
+      cancelReason: reason,
+    }, {
+      type: "cancelled",
+      note: reason,
+    });
+    return text({ order });
+  },
+);
+
+server.tool(
+  "order_fulfill_dry_run",
+  "Mark a local demo order fulfilled by a dry-run adapter. No real vendor is contacted.",
+  {
+    orderId: z.string().min(1),
+    confirm: z.literal("FULFILL_DRY_RUN"),
+  },
+  async ({ orderId }) => {
+    const current = await getOrder(orderId);
+    if (current.status === "cancelled") {
+      return errorText("cancelled orders cannot be fulfilled");
+    }
+    const confirmation = `dryrun_${Date.now()}_${randomUUID().slice(0, 8)}`;
+    const order = await updateOrder(orderId, {
+      status: "fulfilled_demo",
+      fulfillment: {
+        adapter: "dry_run",
+        confirmation,
+        fulfilledAt: new Date().toISOString(),
+      },
+    }, {
+      type: "fulfilled_demo",
+      data: { confirmation },
+      note: "Dry-run fulfillment only.",
+    });
+    const receipt = await addReceipt({
+      kind: "order_fulfill_dry_run",
+      status: "confirmed",
+      network: NETWORK,
+      chainId: CHAIN_ID,
+      title: `Dry-run fulfilled order ${order.id}`,
+      summary: `${order.vendorDisplayName ?? order.vendorId}: ${confirmation}`,
+      to: order.vendorAddress,
+      amount: order.amount,
+      asset: order.asset,
+      result: order,
+    });
+    return text({
+      order,
+      receipt,
+      warning: "Dry-run fulfillment only. No real goods, food, tickets, services, or gift cards were delivered.",
+    });
   },
 );
 

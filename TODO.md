@@ -49,6 +49,7 @@ Legend:
 - [x] Low-value reservation expiry/manual release and approval summary rendering.
 - [x] Local canonical runbook registry tools with stable content hashes.
 - [x] Draft/validate/prepare flows attach canonical runbook metadata and required-field checks.
+- [x] Vendor registry hashes/signature status, demo order lifecycle, and dry-run fulfillment adapter.
 - [x] Local addressbook with named-recipient transfer resolution.
 - [x] Demo vendor registry with pizza, flight, plumber, gift-card, and legal-review examples.
 - [x] Draft runbooks for payment, service booking, escrow, trade, policy, receipt, and vendor-rating flows.
@@ -425,16 +426,16 @@ Whitepaper refs: §27.8, §28.5, §99.3.
 
 Whitepaper refs: §10, §18, §24, §27.7.
 
-- [ ] **MCP** Replace demo vendor registry with pluggable signed vendor registries.
+- [x] **MCP** Replace demo vendor registry with pluggable signed vendor registries.
   - Local JSON remains for demos.
   - Signed registry format includes issuer, signature, expiry, category taxonomy, fulfillment schema, API capability metadata.
 - [ ] **CORE SDK INDEXER** Bind vendor registry to on-chain discovery registry when available.
 - [ ] **MCP** Vendor fulfillment adapters.
-  - Dry-run adapter.
+  - Dry-run adapter is implemented via `order_fulfill_dry_run`.
   - Webhook adapter.
   - API-key adapter with local secret store.
   - Manual confirmation adapter.
-- [ ] **MCP** Order lifecycle.
+- [x] **MCP** Order lifecycle.
   - `order_quote`, `order_create`, `order_pay`, `order_status`, `order_receipt`, `order_cancel`.
   - For now, demo only; production requires real vendor terms and fulfillment hooks.
 - [ ] **MCP** Invoices and funding requests.

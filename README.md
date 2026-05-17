@@ -153,6 +153,7 @@ examples/claude_desktop_config.json
 | `LYTH_MCP_ADDRESSBOOK` | `~/.lyth_mcp/addressbook.json` | Local contact/addressbook store path |
 | `LYTH_MCP_OUTBOX` | `~/.lyth_mcp/outbox.json` | Local signed-payload outbox for retrying without rebuilding/re-signing |
 | `LYTH_MCP_RECEIPTS` | `~/.lyth_mcp/receipts.json` | Local receipt store for drafted/signed/submitted/failed operations |
+| `LYTH_MCP_ORDER_STORE` | `~/.lyth_mcp/orders.json` | Local demo order lifecycle store |
 | `LYTH_MCP_RUNBOOK_REGISTRY` | bundled `runbooks/` | Local canonical runbook registry path |
 | `LYTH_MCP_WALLET_PASSPHRASE` | unset | Optional env passphrase for unattended passphrase signing; safer to pass per call |
 | `LYTH_MCP_DEFAULT_LOW_VALUE_MAX` | `10` | Default LYTH per-transaction cap for passphrase-less wallets |
@@ -197,6 +198,17 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `validate_runbook` | Check a runbook against spending policy and safety rules |
 | `prepare_wallet_request` | Prepare a wallet approval payload where supported |
 | `vendor_search` | Search a local vendor registry JSON |
+| `vendor_registry_info` | Show registry hashes, issuer, expiry, signature status, and categories |
+| `vendor_get` | Get one vendor by id |
+| `order_quote` | Quote a demo vendor catalog item |
+| `order_create` | Create a local demo order |
+| `order_pay` | Prepare a pay_vendor runbook and optional wallet request for an order |
+| `order_mark_paid` | Mark a local order paid after supplying a tx hash |
+| `order_status` | Get one local order |
+| `order_list` | List local orders |
+| `order_receipt` | Export a local order receipt |
+| `order_cancel` | Cancel a local order before dry-run fulfillment |
+| `order_fulfill_dry_run` | Mark a local demo order fulfilled without contacting a real vendor |
 | `submit_signed_transaction` | Broadcast an already-signed payload, disabled unless explicitly enabled; can update an outbox id |
 | `tx_outbox_list` | List local signed payloads that can be retried |
 | `tx_outbox_get` | Inspect one local signed payload |
@@ -539,6 +551,33 @@ The included `vendors.example.json` contains demo vendors for:
 | `legal-review-demo` | `professional_services` | Existing professional-services demo |
 
 This local registry is only an MVP discovery layer. A production vendor registry should be on-chain or backed by signed vendor metadata, real vendor verification, and fulfillment webhooks/API credentials.
+
+The MCP now computes registry hashes and can verify optional `ed25519` signature metadata when present:
+
+```json
+{
+  "signature": {
+    "algorithm": "ed25519",
+    "publicKeyPem": "-----BEGIN PUBLIC KEY-----...",
+    "signatureBase64": "..."
+  }
+}
+```
+
+Signature verification covers the canonical registry payload excluding `signature` and `signatures`.
+
+## Demo Orders
+
+Local orders are for MCP flow testing. They do not contact real vendors or deliver real goods.
+
+Typical flow:
+
+1. `order_quote`
+2. `order_create`
+3. `order_pay`
+4. `order_mark_paid` with an observed tx hash, or continue as payment-prepared in a dry run
+5. `order_fulfill_dry_run`
+6. `order_receipt`
 
 ## Broadcasting Signed Payloads
 
