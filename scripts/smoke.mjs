@@ -1,4 +1,5 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,6 +25,10 @@ const errorExplain = await import("../dist/error_explain.js");
 const clusters = await import("../dist/clusters.js");
 const delegation = await import("../dist/delegation.js");
 const nodes = await import("../dist/nodes.js");
+const walletSafety = await import("../dist/wallet_safety.js");
+const security = await import("../dist/security.js");
+const readiness = await import("../dist/readiness.js");
+const demoConnectors = await import("../dist/demo_connectors.js");
 
 function assert(condition, message) {
   if (!condition) {
@@ -235,6 +240,167 @@ assert(hosting.risk === "low", "expected community baremetal hosting to be low r
 const runbookList = await runbooks.listCanonicalRunbooks("./runbooks");
 assert(runbookList.length >= 9, "expected bundled canonical runbooks");
 
+const walletFixture = {
+  name: "pizza-agent",
+  address: "0x71550000000000000000000000000000000029bd",
+  publicKey: "0xabc",
+  algorithm: "PQM1-MLDSA65",
+  keyProtection: "local_machine_key",
+  createdAt: new Date().toISOString(),
+  lowValue: {
+    enabled: true,
+    asset: "LYTH",
+    maxAmount: "10",
+    dailyLimit: "50",
+    accounting: {
+      remainingToday: "48",
+      reserved: "0.2",
+      submitted: "0",
+    },
+    configuredAt: new Date().toISOString(),
+  },
+  agent: {
+    purpose: "Small food-ordering demos on testnet",
+    network: "testnet-69420",
+    allowedCategories: ["food"],
+    fallbackApproval: "wallet_handoff",
+    paused: false,
+    updatedAt: new Date().toISOString(),
+  },
+};
+const safetyProfile = walletSafety.accountSafetyProfiles({
+  wallets: [walletFixture],
+  outboxEntries: [],
+  receipts: [],
+});
+const allowedHotSpend = walletSafety.simulateHotWalletPolicy({
+  wallet: walletFixture,
+  amount: "5",
+  category: "food",
+});
+const blockedHotSpend = walletSafety.simulateHotWalletPolicy({
+  wallet: walletFixture,
+  amount: "12",
+  category: "food",
+});
+const threshold = walletSafety.explainWalletThresholds({
+  amount: "5",
+  lowValueCap: "10",
+  passkeyCap: "100",
+  walletHasLowValuePolicy: true,
+});
+assert(safetyProfile.highestRisk === "medium", "expected local hot wallet profile to be medium risk");
+assert(allowedHotSpend.ok === true, "expected hot-wallet policy to allow 5 LYTH food spend");
+assert(blockedHotSpend.ok === false, "expected hot-wallet policy to block amount above cap");
+assert(threshold.selectedTier === "agent_hot_wallet", "expected threshold explanation to select agent hot wallet");
+
+const securityContext = {
+  network: "testnet-69420",
+  chainId: 69420,
+  submitEnabled: false,
+  rpcHealth: {
+    selectedRead: "http://127.0.0.1:8545",
+    selectedWrite: null,
+    endpoints: [{ endpoint: "http://127.0.0.1:8545", ok: true, score: 60, writeReady: false }],
+  },
+  bridgeRegistry: bridgeRegistry.registry,
+  clusterRegistry: clusterRegistry.registry,
+  nodeRegistry: nodeRegistry.registry,
+  wallets: [walletFixture],
+  outboxEntries: [],
+  receipts: [],
+  runbookCount: runbookList.length,
+};
+const securityDashboard = security.securityStatus(securityContext);
+const emergencyWatch = security.emergencyStateWatch(securityContext);
+const blastRadius = security.bridgeBlastRadiusMonitor(securityContext);
+const recovery = security.recoveryStatus(securityContext, "pizza-agent");
+const recoveryDraft = security.recoveryRunbookDraft({ kind: "pause_agent", walletName: "pizza-agent" });
+const auditGates = security.auditResearchGateDashboard(securityContext);
+assert(securityDashboard.components.some((component) => component.id === "mempool_rpc"), "expected mempool security component");
+assert(emergencyWatch.events.some((event) => event.code === "BridgeRoutePaused"), "expected emergency bridge pause event");
+assert(blastRadius.severity === "critical", "expected critical bridge blast radius from paused trusted route");
+assert(recovery.wallets[0].availableRunbooks.length >= 4, "expected recovery runbooks");
+assert(recoveryDraft.requiredTool === "agent_wallet_pause", "expected pause recovery runbook draft");
+assert(auditGates.gates.some((gate) => gate.id === "riscv_vm"), "expected RISC-V audit gate");
+
+const readinessDashboard = readiness.readinessCheck({
+  toolNames: [
+    "contract_path_guidance",
+    "asset_registry_info",
+    "asset_search",
+    "asset_risk_label",
+    "vendor_search",
+    "order_create",
+    "booking_request_create",
+    "funding_request_create",
+    "provider_onboarding_draft",
+    "bridge_routes",
+    "bridge_quote",
+    "bridge_circuit_breaker_watch",
+    "liquidity_onboarding",
+    "agent_wallet_create",
+    "wallet_preflight_transfer",
+    "wallet_build_transfer",
+    "wallet_safety_profile",
+    "hot_wallet_policy_simulate",
+    "runbook_list",
+    "runbook_get",
+    "validate_runbook",
+    "prepare_wallet_request",
+    "security_status",
+    "emergency_state_watch",
+    "bridge_blast_radius",
+    "recovery_status",
+  ],
+  runbookCount: runbookList.length,
+  vendorCount: 5,
+  bridgeRouteCount: bridgeRegistry.registry.routes.length,
+  activeBridgeRouteCount: bridgeRegistry.registry.routes.filter((route) => route.status === "active").length,
+  assetCount: assetRegistry.registry.assets.length,
+  walletCount: 1,
+  docsUpdated: true,
+  testsUpdated: true,
+});
+assert(readinessDashboard.gates.length === 9, "expected all readiness gates");
+assert(readiness.readinessCheck({
+  toolNames: [],
+  runbookCount: 0,
+  vendorCount: 0,
+  bridgeRouteCount: 0,
+  activeBridgeRouteCount: 0,
+  assetCount: 0,
+  walletCount: 0,
+}, "bridge").gates[0].id === "bridge", "expected bridge readiness gate filter");
+
+const connectorTemplates = demoConnectors.listDemoConnectorTemplates();
+const coinsbeeTemplate = demoConnectors.getDemoConnectorTemplate("coinsbee-giftcards-demo");
+const foodDraft = demoConnectors.demoConnectorDraft({ templateId: "food-delivery-demo", vendorId: "pizza-demo" });
+assert(connectorTemplates.length >= 7, "expected demo connector templates");
+assert(coinsbeeTemplate.status === "todo_demo_stub", "expected Coinsbee template to be marked TODO/demo");
+assert(foodDraft.connectorSetDraft.enabled === false, "expected demo connector draft to be disabled by default");
+
+const failureCases = JSON.parse(await readFile(new URL("../fixtures/failure_cases.json", import.meta.url), "utf8"));
+for (const failureCase of failureCases) {
+  const explained = errorExplain.explainError(failureCase.input);
+  assert(explained.classification === failureCase.expected.classification, `expected failure classification for ${failureCase.name}`);
+  assert(explained.retryable === failureCase.expected.retryable, `expected retryable flag for ${failureCase.name}`);
+}
+
+const mockRpc = await startMockRpc();
+try {
+  const failedSubmit = await mockRpc.call("lyth_submitEncrypted", ["0xdeadbeef"]);
+  assert(failedSubmit.error?.code === -32047, "expected mocked encrypted submit failure");
+  const explained = errorExplain.explainError({
+    errorMessage: `${failedSubmit.error.message}`,
+    code: failedSubmit.error.code,
+    rpcMethod: "lyth_submitEncrypted",
+  });
+  assert(explained.classification === "mempool_envelope_decryption", "expected mocked RPC failure to classify as mempool decryption");
+} finally {
+  await mockRpc.close();
+}
+
 console.log(JSON.stringify({
   ok: true,
   temp,
@@ -254,5 +420,53 @@ console.log(JSON.stringify({
   autovoteCandidates: autovote.rankedCandidates.length,
   nodes: nodeRegistry.registry.nodes.length,
   nodeDiversity: diversity.score,
+  security: securityDashboard.severity,
+  readiness: readinessDashboard.completionPercent,
+  demoConnectorTemplates: connectorTemplates.length,
   runbooks: runbookList.length,
 }, null, 2));
+
+async function startMockRpc() {
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => {
+      const request = JSON.parse(body || "{}");
+      const response = request.method === "lyth_submitEncrypted"
+        ? {
+            jsonrpc: "2.0",
+            id: request.id,
+            error: {
+              code: -32047,
+              message: "upstream unavailable: mempool: decryption failed",
+            },
+          }
+        : {
+            jsonrpc: "2.0",
+            id: request.id,
+            result: "0x10f2c",
+          };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(response));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const url = `http://127.0.0.1:${address.port}`;
+  return {
+    url,
+    async call(method, params = []) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      });
+      return res.json();
+    },
+    close() {
+      return new Promise((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
+    },
+  };
+}

@@ -149,9 +149,10 @@ Whitepaper refs: §10, §21.2.1, §24.10, §27.6, §28.5, §30.1.
   - Tools: `policy_draft`, `policy_validate`, `policy_create`, `policy_update`, `policy_revoke`, `policy_explain`.
   - Support budget caps, per-tx caps, counterparty allowlists, category limits, time windows, expiry, and emergency pause.
 - [ ] **MCP** Mirror policies locally for explainability, but always treat on-chain policy as authoritative.
-- [ ] **MCP** Add policy simulation before signing.
+- [x] **MCP** Add policy simulation before signing.
   - "Would this tx pass if submitted right now?"
   - Show exact failing policy clause.
+  - Implemented locally for explicit agent hot-wallet policies as `hot_wallet_policy_simulate`; full on-chain spending-policy simulation remains TODO(core/wallet).
 - [ ] **WALLET** Add wallet handoff support.
   - MCP drafts request; wallet renders and signs.
   - High-value custody does not need to live inside MCP for normal production usage.
@@ -162,8 +163,9 @@ Whitepaper refs: §10, §21.2.1, §24.10, §27.6, §28.5, §30.1.
 - [ ] **CORE SDK WALLET** Add SLH-DSA emergency-key support.
   - Tools: `emergency_key_status`, `emergency_key_register_draft`, `emergency_key_rotate_draft`.
   - Explain G3 freeze consequences to users without backup keys.
-- [ ] **MCP** Add account safety profile.
+- [x] **MCP** Add account safety profile.
   - Shows PQM-1 backup status, emergency-key status, policy status, multisig status, and recent risky operations.
+  - Implemented as `wallet_safety_profile` for local key protection, low-value caps, agent metadata, outbox pressure, recovery path, and missing production signals. Core/wallet emergency-key, passkey, multisig, and on-chain policy signals remain TODO.
 
 ## P3: Canonical Runbook Engine
 
@@ -393,22 +395,26 @@ Whitepaper refs: §14, §20, §23, §28, §30.5.
 
 Whitepaper refs: §21, §29, §30, §99.8.
 
-- [ ] **MCP** Threat posture summary.
+- [x] **MCP** Threat posture summary.
   - `security_status` reports mempool mode, Ferveo threshold status, zk verifier backend, IBC hardening status, oracle status, RISC-V VM gate status.
-- [ ] **MCP** Emergency-state watcher.
+- [x] **MCP** Emergency-state watcher.
   - Detect and explain G3 declarations, algorithm freezes, bridge freezes, circuit breakers, checkpoint anomalies.
+  - Implemented as `emergency_state_watch` for local RPC/write readiness, bridge circuit breakers, stale signed payloads, failure spikes, and TODO(mainnet) gaps for G3/PQ declarations/checkpoints.
 - [ ] **CORE SDK INDEXER** PQ checkpoint tools.
   - `checkpoint_latest`, `checkpoint_verify`, `checkpoint_explain`.
   - Distinguish fast block finality from PQ-attested deep settlement.
-- [ ] **MCP** Bridge and cross-chain settlement blast-radius monitor.
+- [x] **MCP** Bridge and cross-chain settlement blast-radius monitor.
   - Freeze new bridge operations when emergency state says routes are paused.
   - Surface in-flight settlement risk.
-- [ ] **WALLET MCP** Recovery runbook tools.
+  - Implemented as `bridge_blast_radius` over local route metadata, outbox entries, and receipts. Live settlement state remains TODO(core/indexer).
+- [x] **WALLET MCP** Recovery runbook tools.
   - `recovery_status`, `recovery_rotate_draft`, `recovery_claim_start`.
   - Explain frozen-account path for users without backup keys.
-- [ ] **MCP** Audit/research gate dashboard.
+  - Implemented local `recovery_status` and `recovery_runbook_draft` for pause/drain/delete/stale-outbox release/future emergency-key rotation. Core-backed recovery claims and frozen-account paths remain TODO(core/wallet).
+- [x] **MCP** Audit/research gate dashboard.
   - Track zkML verifier, Rust/RISC-V VM, MRC standards, EVM retirement, FRI/STARK verifier, Ferveo, oracle, IBC, DAG sync.
   - Pull from chain milestone/config where possible, otherwise from a signed metadata source.
+  - Implemented as `audit_gate_dashboard` with local/TODO status. Signed milestone/config source remains TODO(mainnet).
 
 ## P11: Natural-Language Search And Explanation
 
@@ -458,11 +464,12 @@ Whitepaper refs: §10, §18, §24, §27.7.
 - [x] **MCP** Service booking.
   - `booking_request_create`, `booking_accept_demo`, `booking_prepare_escrow`, `booking_mark_paid`, `booking_complete_dry_run`, `booking_dispute_demo`, `booking_cancel`.
   - Local workflow only; production requires real provider connectors and live escrow integration.
-- [ ] **MCP** External commerce connectors.
+- [x] **MCP** External commerce connectors.
   - Generic webhook/API-key connector is implemented; product-specific integrations remain TODO.
   - Stripe/agent-commerce protocol style connectors if appropriate.
   - Coinsbee-style gift-card connector only with official API credentials and clear legal/compliance posture.
   - Travel/food/service connectors through vendor-approved integrations.
+  - Added clearly marked TODO/demo stubs through `demo_connector_templates`, `demo_connector_get`, and `demo_connector_draft`; real integrations still require official APIs, credentials, provider approval, webhook verification, and compliance review.
 - [x] **MCP** Merchant risk controls.
   - `merchant_policy_set/get/list/remove`, `merchant_risk_check`.
   - Enforced by `order_create`, `order_pay`, and `booking_request_create`.
@@ -472,6 +479,9 @@ Whitepaper refs: §10, §18, §24, §27.7.
 
 Whitepaper refs: §18, §22, §24.2, §26, §27, §29.5, §99.8.
 
+- [x] **MCP** Mainnet readiness dashboard.
+  - Implemented as `readiness_check` across no-EVM, MRC, agent-commerce, bridge, wallet, runbook, security, docs, and tests.
+  - This reports MCP readiness only; gate completion still depends on core, SDK, indexer, wallet, audit, and live testnet evidence.
 - [ ] **MCP** No-EVM readiness.
   - RISC-V VM and MRC SDK surfaces available.
   - `contract_path_guidance` gives explicit no-EVM/Solidity guidance now.
@@ -496,6 +506,7 @@ Whitepaper refs: §18, §22, §24.2, §26, §27, §29.5, §99.8.
   - User README, operator README, developer README, connector guide, security model, production deployment guide.
 - [ ] **MCP** Test readiness.
   - Dist-based smoke test is implemented via `npm test` / `scripts/smoke.mjs` for stores, connectors, policies, bookings, orders, invoices, bridge routes, and runbooks.
+  - Golden failure fixtures and a mocked RPC encrypted-submit failure are implemented under `fixtures/failure_cases.json` and `scripts/smoke.mjs`.
   - Unit tests for stores, policies, addressbook, outbox, receipts.
   - Integration tests against mock RPC.
   - Live testnet smoke tests gated by env.

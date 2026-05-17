@@ -146,7 +146,7 @@ const RULES: ErrorRule[] = [
   },
   {
     classification: "bridge_route",
-    pattern: /(bridge route|circuit breaker|drain cap|cooldown|route.*paused|executable.*false|not active)/i,
+    pattern: /(bridge route|circuit breaker|drain cap|cooldown|route.*paused|route status is|executable.*false|not active)/i,
     retryable: false,
     severity: "blocked",
     plainEnglish: "The bridge route is not currently safe or executable.",

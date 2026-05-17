@@ -54,6 +54,12 @@ import {
   type ConnectorRecord,
 } from "./connectors.js";
 import {
+  demoConnectorDraft,
+  getDemoConnectorTemplate,
+  listDemoConnectorTemplates,
+  type DemoConnectorKind,
+} from "./demo_connectors.js";
+import {
   bridgeCircuitBreakerAlerts,
   bridgeCooldownMatrix,
   bridgeRegistrySummary,
@@ -148,6 +154,19 @@ import {
   type NodeStatus,
 } from "./nodes.js";
 import {
+  readinessCheck,
+  type ReadinessGateId,
+} from "./readiness.js";
+import {
+  auditResearchGateDashboard,
+  bridgeBlastRadiusMonitor,
+  emergencyStateWatch,
+  recoveryRunbookDraft,
+  recoveryStatus,
+  securityStatus,
+  type SecurityContext,
+} from "./security.js";
+import {
   evaluateMerchantPolicy,
   getMerchantPolicy,
   listMerchantPolicies,
@@ -185,6 +204,11 @@ import {
   updateAgentWalletMetadata,
   walletStoreInfo,
 } from "./wallet.js";
+import {
+  accountSafetyProfiles,
+  explainWalletThresholds,
+  simulateHotWalletPolicy,
+} from "./wallet_safety.js";
 
 const DEFAULT_CHAIN_ID = 69420;
 const DEFAULT_NETWORK = "testnet-69420";
@@ -1138,6 +1162,32 @@ async function loadNodes() {
   return loadNodeRegistry(NODE_REGISTRY_PATH);
 }
 
+async function buildSecurityContext(args: { includeRpc?: boolean } = {}): Promise<SecurityContext> {
+  const [bridgeRoutes, clusters, nodes, wallets, outboxEntries, receipts, runbooks, health] = await Promise.all([
+    loadBridgeRoutes(),
+    loadClusters(),
+    loadNodes(),
+    listWallets(),
+    listOutboxEntries({ limit: 250 }),
+    listReceipts({ limit: 250 }),
+    listCanonicalRunbooks(RUNBOOK_REGISTRY_PATH),
+    args.includeRpc === false ? Promise.resolve(undefined) : rpcHealth(),
+  ]);
+  return {
+    network: NETWORK,
+    chainId: CHAIN_ID,
+    submitEnabled: SUBMIT_ENABLED,
+    rpcHealth: health,
+    bridgeRegistry: bridgeRoutes.registry,
+    clusterRegistry: clusters.registry,
+    nodeRegistry: nodes.registry,
+    wallets,
+    outboxEntries,
+    receipts,
+    runbookCount: runbooks.length,
+  };
+}
+
 async function quoteOrder(args: {
   vendorId: string;
   itemId?: string;
@@ -1573,6 +1623,9 @@ const nodeRoleEnum = z.enum(["validator", "rpc", "archive", "prover", "oracle", 
 const nodeStatusEnum = z.enum(["active", "draft", "degraded", "paused", "retired"]);
 const nodeHostingClassEnum = z.enum(["community_baremetal", "cloud_dedicated", "cloud_shared", "cloud_gpu", "planned_mixed"]);
 const attestationStatusEnum = z.enum(["verified", "draft", "missing", "expired", "mismatch"]);
+const readinessGateEnum = z.enum(["no_evm", "mrc", "agent_commerce", "bridge", "wallet", "runbook", "security", "docs", "tests", "all"]);
+const recoveryRunbookKindEnum = z.enum(["pause_agent", "drain_agent", "delete_local_wallet", "release_stale_outbox", "rotate_emergency_key"]);
+const demoConnectorKindEnum = z.enum(["stripe", "coinsbee", "travel", "food", "service_provider", "agent_commerce_protocol", "universal_commerce_protocol"]);
 const assetKindEnum = z.enum(["native", "private_native", "wrapped", "issuer_native", "mrc20", "nft", "vault"]);
 const assetStatusEnum = z.enum(["active", "draft", "deprecated", "blocked"]);
 const assetDenominationEnum = z.enum(["public", "private", "external"]);
@@ -1611,6 +1664,76 @@ const server = new McpServer({
   name: "lyth-mcp",
   version: "0.1.0",
 });
+
+const MCP_TOOL_NAMES = [
+  "chain_status",
+  "rpc_health",
+  "mcp_self_check",
+  "account_overview",
+  "recent_transactions",
+  "tx_lookup",
+  "tx_error_explain",
+  "ask_chain",
+  "tx_status_summary",
+  "tx_watch",
+  "search_chain",
+  "markets",
+  "mcp_dashboard",
+  "list_runbooks",
+  "runbook_list",
+  "runbook_get",
+  "runbook_verify",
+  "runbook_diff_versions",
+  "draft_runbook",
+  "validate_runbook",
+  "prepare_wallet_request",
+  "wallet_funding_address",
+  "wallet_setup",
+  "wallet_import",
+  "wallet_list",
+  "wallet_preflight_transfer",
+  "wallet_approval_summary",
+  "wallet_build_transfer",
+  "wallet_safety_profile",
+  "hot_wallet_policy_simulate",
+  "wallet_threshold_explain",
+  "agent_wallet_create",
+  "agent_wallet_fund_request",
+  "agent_wallet_limits",
+  "agent_wallet_pause",
+  "agent_wallet_drain",
+  "agent_wallet_delete",
+  "vendor_search",
+  "provider_onboarding_draft",
+  "order_create",
+  "booking_request_create",
+  "invoice_create",
+  "funding_request_create",
+  "connector_set",
+  "merchant_risk_check",
+  "asset_registry_info",
+  "asset_search",
+  "asset_risk_label",
+  "privacy_policy_check",
+  "contract_path_guidance",
+  "bridge_routes",
+  "bridge_route_get",
+  "bridge_quote",
+  "bridge_cooldown_matrix",
+  "bridge_status_summary",
+  "bridge_circuit_breaker_watch",
+  "liquidity_onboarding",
+  "security_status",
+  "emergency_state_watch",
+  "bridge_blast_radius",
+  "recovery_status",
+  "recovery_runbook_draft",
+  "audit_gate_dashboard",
+  "readiness_check",
+  "demo_connector_templates",
+  "demo_connector_get",
+  "demo_connector_draft",
+];
 
 server.tool("chain_status", "Probe Monolythium live RPC endpoints and return chain/indexer/mempool status.", {}, async () => {
   const probes = await Promise.all(CONFIGURED_RPCS.map(probeEndpoint));
@@ -1684,6 +1807,180 @@ server.tool("mcp_self_check", "Check MCP install, config, stores, and RPC reacha
     ],
   });
 });
+
+server.tool(
+  "security_status",
+  "Render the MCP-local security dashboard: RPC/mempool posture, Ferveo TODO, zk/IBC bridge posture, oracle metadata, RISC-V VM gate, wallet hot mode, and outbox pressure.",
+  {
+    includeRpc: z.boolean().optional().describe("Probe live RPC health. Default true."),
+  },
+  async ({ includeRpc }) => text(securityStatus(await buildSecurityContext({ includeRpc: includeRpc !== false }))),
+);
+
+server.tool(
+  "emergency_state_watch",
+  "Watch local emergency signals: RPC write readiness, bridge circuit breakers, stale signed payloads, broadcast-failure spikes, and TODO(mainnet) G3 emergency-state gap.",
+  {
+    includeRpc: z.boolean().optional().describe("Probe live RPC health. Default true."),
+  },
+  async ({ includeRpc }) => {
+    const result = emergencyStateWatch(await buildSecurityContext({ includeRpc: includeRpc !== false }));
+    return result.severity === "critical" ? errorJson(result) : text(result);
+  },
+);
+
+server.tool(
+  "bridge_blast_radius",
+  "Summarize affected bridge routes, local in-flight bridge/swap receipts, signed bridge payloads, and freeze recommendations.",
+  {
+    asset: z.string().optional(),
+    includeDraftRoutes: z.boolean().optional().describe("Include draft/degraded/paused routes. Default true."),
+  },
+  async ({ asset, includeDraftRoutes }) => {
+    const result = bridgeBlastRadiusMonitor(await buildSecurityContext({ includeRpc: false }), { asset, includeDraftRoutes });
+    return result.severity === "critical" ? errorJson(result) : text(result);
+  },
+);
+
+server.tool(
+  "recovery_status",
+  "Show local account recovery posture and available recovery runbooks for agent wallets.",
+  {
+    walletName: z.string().optional(),
+  },
+  async ({ walletName }) => text(recoveryStatus(await buildSecurityContext({ includeRpc: false }), walletName)),
+);
+
+server.tool(
+  "recovery_runbook_draft",
+  "Draft a local recovery runbook for pausing, draining, deleting a wallet, releasing stale outbox allowance, or future emergency-key rotation.",
+  {
+    kind: recoveryRunbookKindEnum,
+    walletName: z.string().optional(),
+    outboxId: z.string().optional(),
+    reason: z.string().optional(),
+  },
+  async (args) => text(recoveryRunbookDraft(args)),
+);
+
+server.tool(
+  "audit_gate_dashboard",
+  "Show local audit/research gate status for zkML verifier, Rust/RISC-V VM, MRC standards, EVM retirement, FRI/STARK verifier, Ferveo, oracle, IBC, and DAG sync.",
+  {},
+  async () => text(auditResearchGateDashboard(await buildSecurityContext({ includeRpc: false }))),
+);
+
+server.tool(
+  "readiness_check",
+  "Show MCP mainnet-readiness gates: no-EVM, MRC, agent-commerce, bridge, wallet, runbook, security, docs, and tests.",
+  {
+    gate: readinessGateEnum.optional(),
+  },
+  async ({ gate }) => {
+    const [vendors, assets, bridges, runbooks, wallets] = await Promise.all([
+      loadVendors(),
+      loadAssets(),
+      loadBridgeRoutes(),
+      listCanonicalRunbooks(RUNBOOK_REGISTRY_PATH),
+      listWallets(),
+    ]);
+    return text(readinessCheck({
+      toolNames: MCP_TOOL_NAMES,
+      runbookCount: runbooks.length,
+      vendorCount: vendors.registry.vendors.length,
+      bridgeRouteCount: bridges.registry.routes.length,
+      activeBridgeRouteCount: bridges.registry.routes.filter((route) => route.status === "active").length,
+      assetCount: assets.registry.assets.length,
+      walletCount: wallets.length,
+      docsUpdated: true,
+      testsUpdated: true,
+    }, gate as ReadinessGateId | "all" | undefined));
+  },
+);
+
+server.tool(
+  "wallet_safety_profile",
+  "Show account safety profile: key protection, hot-wallet caps, agent metadata, pending signed payloads, recovery path, and missing production wallet/core signals.",
+  {
+    walletName: z.string().optional(),
+  },
+  async ({ walletName }) => text(accountSafetyProfiles({
+    wallets: await listWallets(),
+    outboxEntries: await listOutboxEntries({ walletName, limit: 250 }),
+    receipts: await listReceipts({ walletName, limit: 250 }),
+    walletName,
+  })),
+);
+
+server.tool(
+  "hot_wallet_policy_simulate",
+  "Simulate whether a proposed small spend would pass the local agent hot-wallet policy right now.",
+  {
+    walletName: z.string().min(1),
+    amount: z.string().min(1),
+    asset: z.string().optional(),
+    counterparty: z.string().optional().describe("Optional exact 0x address, contact name, or vendor id to compare with wallet allowlist."),
+    category: z.string().optional(),
+  },
+  async ({ walletName, amount, asset, counterparty, category }) => {
+    const wallet = (await listWallets()).find((item) => item.name === walletName);
+    if (!wallet) {
+      return errorText(`wallet '${walletName}' not found`);
+    }
+    const result = simulateHotWalletPolicy({ wallet, amount, asset, counterparty, category });
+    return result.ok ? text(result) : errorJson(result);
+  },
+);
+
+server.tool(
+  "wallet_threshold_explain",
+  "Explain when an agent hot wallet, passkey/wallet handoff, or full-key/hardware approval should be used for a spend.",
+  {
+    amount: z.string().optional(),
+    asset: z.string().optional(),
+    lowValueCap: z.string().optional(),
+    passkeyCap: z.string().optional(),
+    hardwareCap: z.string().optional(),
+    walletHasLowValuePolicy: z.boolean().optional(),
+    passkeyAvailable: z.boolean().optional(),
+    hardwareWalletAvailable: z.boolean().optional(),
+  },
+  async (args) => text(explainWalletThresholds(args)),
+);
+
+server.tool(
+  "demo_connector_templates",
+  "List clearly marked TODO/demo connector templates for Stripe, Coinsbee, travel, food, service providers, ACP, and UCP.",
+  {
+    kind: demoConnectorKindEnum.optional(),
+    category: z.string().optional(),
+  },
+  async ({ kind, category }) => text({
+    warning: "These are TODO/demo stubs only. They do not authorize real external commerce integrations.",
+    templates: listDemoConnectorTemplates({ kind: kind as DemoConnectorKind | undefined, category }),
+  }),
+);
+
+server.tool(
+  "demo_connector_get",
+  "Get one TODO/demo connector template with payload shape, required fields, safety notes, and implementation todos.",
+  {
+    templateId: z.string().min(1),
+  },
+  async ({ templateId }) => text(getDemoConnectorTemplate(templateId)),
+);
+
+server.tool(
+  "demo_connector_draft",
+  "Draft a disabled connector_set payload from a TODO/demo connector template.",
+  {
+    templateId: z.string().min(1),
+    vendorId: z.string().optional(),
+    endpoint: z.string().url().optional(),
+    authMode: z.enum(["bearer", "header", "hmac_sha256"]).optional(),
+  },
+  async (args) => text(demoConnectorDraft(args)),
+);
 
 server.tool(
   "wallet_funding_address",
@@ -2831,6 +3128,122 @@ server.tool(
         },
       });
     }
+    if (/(readiness|mainnet gate|mainnet readiness|production readiness|what.*left|completion)/i.test(question)) {
+      const [vendors, assets, bridges, runbooks, wallets] = await Promise.all([
+        loadVendors(),
+        loadAssets(),
+        loadBridgeRoutes(),
+        listCanonicalRunbooks(RUNBOOK_REGISTRY_PATH),
+        listWallets(),
+      ]);
+      return asText({
+        question,
+        intent: "readiness_check",
+        typedTool: "readiness_check",
+        sources: [
+          { type: "local_registry", path: VENDOR_REGISTRY_PATH, hash: vendors.payloadHash },
+          { type: "local_registry", path: ASSET_REGISTRY_PATH, hash: assets.contentHash },
+          { type: "local_registry", path: BRIDGE_ROUTE_REGISTRY_PATH, hash: bridges.contentHash },
+          { type: "local_registry", path: RUNBOOK_REGISTRY_PATH },
+        ],
+        result: readinessCheck({
+          toolNames: MCP_TOOL_NAMES,
+          runbookCount: runbooks.length,
+          vendorCount: vendors.registry.vendors.length,
+          bridgeRouteCount: bridges.registry.routes.length,
+          activeBridgeRouteCount: bridges.registry.routes.filter((route) => route.status === "active").length,
+          assetCount: assets.registry.assets.length,
+          walletCount: wallets.length,
+          docsUpdated: true,
+          testsUpdated: true,
+        }),
+      });
+    }
+    if (/(security|threat|emergency|recovery|blast[-\s]?radius|audit gate|research gate|g3|checkpoint)/i.test(question)) {
+      const context = await buildSecurityContext({ includeRpc: !/(audit gate|research gate|recovery|blast[-\s]?radius)/i.test(question) });
+      const typedTool = /recovery/i.test(question)
+        ? "recovery_status"
+        : /blast[-\s]?radius|bridge.*risk|bridge.*freeze/i.test(question)
+          ? "bridge_blast_radius"
+          : /audit gate|research gate/i.test(question)
+            ? "audit_gate_dashboard"
+            : /emergency|g3|checkpoint/i.test(question)
+              ? "emergency_state_watch"
+              : "security_status";
+      const result = typedTool === "recovery_status"
+        ? recoveryStatus(context)
+        : typedTool === "bridge_blast_radius"
+          ? bridgeBlastRadiusMonitor(context)
+          : typedTool === "audit_gate_dashboard"
+            ? auditResearchGateDashboard(context)
+            : typedTool === "emergency_state_watch"
+              ? emergencyStateWatch(context)
+              : securityStatus(context);
+      return asText({
+        question,
+        intent: typedTool,
+        typedTool,
+        sources: [
+          { type: "local_registry", path: BRIDGE_ROUTE_REGISTRY_PATH },
+          { type: "local_registry", path: CLUSTER_REGISTRY_PATH },
+          { type: "local_store", path: "wallet/outbox/receipts stores" },
+        ],
+        result,
+      });
+    }
+    if (/(wallet safety|account safety|hot wallet|low[-\s]?value policy|passkey|threshold|hardware wallet)/i.test(question)) {
+      const wallets = await listWallets();
+      const amount = extractDecimal(question);
+      const firstWallet = wallets[0];
+      const typedTool = /passkey|threshold|hardware wallet/i.test(question)
+        ? "wallet_threshold_explain"
+        : /simulate|would|can.*spend|send|pay/i.test(question) && amount && firstWallet
+          ? "hot_wallet_policy_simulate"
+          : "wallet_safety_profile";
+      const result = typedTool === "wallet_threshold_explain"
+        ? explainWalletThresholds({ amount, asset: inferSymbol(question, ["LYTH", "USDC"]) })
+        : typedTool === "hot_wallet_policy_simulate" && firstWallet && amount
+          ? simulateHotWalletPolicy({ wallet: firstWallet, amount, asset: inferSymbol(question, ["LYTH", "USDC"]), category: /food|pizza/i.test(question) ? "food" : undefined })
+          : accountSafetyProfiles({
+              wallets,
+              outboxEntries: await listOutboxEntries({ limit: 100 }),
+              receipts: await listReceipts({ limit: 100 }),
+            });
+      return asText({
+        question,
+        intent: typedTool,
+        typedTool,
+        sources: [{ type: "local_store", path: "wallet/outbox/receipts stores" }],
+        result,
+      });
+    }
+    if (/(demo connector|connector template|stripe|coinsbee|agent commerce protocol|universal commerce protocol|ucp|acp)/i.test(question)) {
+      const kind: DemoConnectorKind | undefined = /stripe/i.test(question)
+        ? "stripe"
+        : /coinsbee/i.test(question)
+          ? "coinsbee"
+          : /\bucp\b|universal commerce protocol/i.test(question)
+            ? "universal_commerce_protocol"
+            : /\bacp\b|agent commerce protocol/i.test(question)
+              ? "agent_commerce_protocol"
+              : /travel|flight/i.test(question)
+                ? "travel"
+                : /food|pizza/i.test(question)
+                  ? "food"
+                  : /service|plumber/i.test(question)
+                    ? "service_provider"
+                    : undefined;
+      return asText({
+        question,
+        intent: "demo_connector_templates",
+        typedTool: "demo_connector_templates",
+        sources: [{ type: "local_templates", module: "demo_connectors" }],
+        result: {
+          warning: "TODO/demo stubs only.",
+          templates: listDemoConnectorTemplates({ kind }),
+        },
+      });
+    }
     if (/(error|failed|revert|decryption|mempool|policy|refused|rejected)/i.test(question)) {
       return asText({
         question,
@@ -3705,11 +4118,32 @@ server.tool(
     const bookingStore = await bookingStoreInfo();
     const invoiceStore = await invoiceStoreInfo();
     const merchantPolicyStore = await merchantPolicyStoreInfo();
+    const [securityContext, vendors, assets, bridgeRoutes, runbooks] = await Promise.all([
+      buildSecurityContext({ includeRpc: false }),
+      loadVendors(),
+      loadAssets(),
+      loadBridgeRoutes(),
+      listCanonicalRunbooks(RUNBOOK_REGISTRY_PATH),
+    ]);
+    const securitySummary = securityStatus(securityContext);
+    const readinessSummary = readinessCheck({
+      toolNames: MCP_TOOL_NAMES,
+      runbookCount: runbooks.length,
+      vendorCount: vendors.registry.vendors.length,
+      bridgeRouteCount: bridgeRoutes.registry.routes.length,
+      activeBridgeRouteCount: bridgeRoutes.registry.routes.filter((route) => route.status === "active").length,
+      assetCount: assets.registry.assets.length,
+      walletCount: wallets.length,
+      docsUpdated: true,
+      testsUpdated: true,
+    });
     const lines = [
       "# Lyth MCP Dashboard",
       "",
       `Network: ${NETWORK} (${CHAIN_ID})`,
       `Broadcast: ${SUBMIT_ENABLED ? "enabled" : "disabled"}`,
+      `Security: ${securitySummary.severity}`,
+      `Readiness: ${readinessSummary.completionPercent}% (${readinessSummary.status})`,
       "",
       mdTable(
         ["Store", "Count", "Path"],

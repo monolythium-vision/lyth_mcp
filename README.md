@@ -184,6 +184,13 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `chain_status` | Probe RPC endpoints and return chain, round, mempool, indexer, and sync status |
 | `rpc_health` | Score configured RPC endpoints for read/write readiness |
 | `mcp_self_check` | Check install/config/store/RPC health |
+| `security_status` | Show MCP-local threat posture across RPC, bridge, wallet, outbox, and TODO(mainnet) security gates |
+| `emergency_state_watch` | Watch emergency signals such as no write-ready RPC, paused bridge routes, stale signed payloads, and failure spikes |
+| `bridge_blast_radius` | Summarize affected bridge routes, local bridge/swap receipts, signed bridge payloads, and freeze recommendations |
+| `recovery_status` | Show recovery posture and available recovery runbooks for local agent wallets |
+| `recovery_runbook_draft` | Draft pause, drain, delete, stale-outbox release, or future emergency-key recovery steps |
+| `audit_gate_dashboard` | Track local audit/research gates for zkML, RISC-V VM, MRC, FRI/STARK, Ferveo, oracle, IBC, and DAG sync |
+| `readiness_check` | Show mainnet-readiness gates for no-EVM, MRC, commerce, bridge, wallet, runbooks, security, docs, and tests |
 | `account_overview` | Get balance, nonce, label, profile, and flow for an address |
 | `recent_transactions` | Read recent transactions from `lyth_txFeed` |
 | `tx_lookup` | Look up status, receipt, transaction, and decoded view by tx hash |
@@ -256,6 +263,9 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `vendor_registry_info` | Show registry hashes, issuer, expiry, signature status, and categories |
 | `vendor_get` | Get one vendor by id |
 | `provider_onboarding_draft` | Draft vendor registry, merchant policy, availability, and connector metadata |
+| `demo_connector_templates` | List TODO/demo connector templates for Stripe, Coinsbee, travel, food, service providers, ACP, and UCP |
+| `demo_connector_get` | Inspect one TODO/demo connector template |
+| `demo_connector_draft` | Create a disabled `connector_set` draft from a TODO/demo connector template |
 | `connector_set` | Create or update an encrypted local webhook connector |
 | `connector_get` | Get one connector without revealing its secret |
 | `connector_list` | List local connectors without revealing secrets |
@@ -315,6 +325,9 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `wallet_low_value_accounting` | Show reserved/submitted/confirmed/failed/expired low-value buckets |
 | `wallet_preflight_transfer` | Check chain id, balance, nonce, RPC health, encryption key, and policy before signing |
 | `wallet_approval_summary` | Render the human-readable approval text for a planned transfer |
+| `wallet_safety_profile` | Explain key protection, hot-wallet caps, pending signed payloads, recovery path, and missing production signals |
+| `hot_wallet_policy_simulate` | Simulate whether a proposed small spend passes the local agent hot-wallet policy |
+| `wallet_threshold_explain` | Explain hot-wallet, passkey/wallet-handoff, and full-key/hardware approval thresholds |
 | `agent_wallet_create` | Create an explicit low-value agent operating wallet with purpose and caps |
 | `agent_wallet_fund_request` | Draft a funding request for an agent wallet |
 | `agent_wallet_limits` | Update an agent wallet's local caps and metadata |
@@ -382,6 +395,30 @@ Use `contract_path_guidance` when a user asks to deploy Solidity or EVM bytecode
 `ask_chain` is a lightweight natural-language router. It maps common questions to typed MCP surfaces such as `chain_status`, `account_overview`, `tx_lookup`, `tx_error_explain`, `vendor_search`, `asset_search`, `bridge_routes`, `bridge_quote`, `markets`, or `search_chain`, and returns the source RPC methods or local registry hashes it used.
 
 `provider_onboarding_draft` builds draft-only metadata for a future provider listing: local vendor registry record, merchant policy, availability placeholder, and optional webhook connector shape. It does not publish anything on-chain and includes `TODO(mainnet)` notes for real signed discovery metadata and provider verification.
+
+## Security And Readiness Dashboards
+
+Use `security_status` for a compact threat posture summary. It checks local RPC/write readiness, bridge verifier posture, IBC route posture, oracle service metadata, RISC-V VM gate status, local hot-wallet pressure, and signed outbox pressure.
+
+Use `emergency_state_watch` when something looks wrong. It surfaces no-write RPC state, paused bridge routes, stale signed payloads, repeated failed broadcasts, and the current TODO(mainnet) gap for G3/PQ emergency declarations.
+
+Use `bridge_blast_radius` before enabling or reopening any bridge route. It joins local route alerts with bridge/swap receipts and signed bridge-like outbox payloads. The current MCP does not build live bridge transactions yet, so in-flight detection is local-store based until core/indexer settlement state exists.
+
+Use `readiness_check` to show the MCP's mainnet-readiness gates:
+
+| Gate | Current MCP role |
+|---|---|
+| `no_evm` | no-EVM guidance and Rust/RISC-V direction |
+| `mrc` | asset labels and privacy policy only |
+| `agent_commerce` | local vendors, orders, bookings, invoices, policies, connectors |
+| `bridge` | route metadata, cooldowns, quotes, circuit-breaker watch |
+| `wallet` | explicit capped agent wallets, preflight, outbox, receipts, safety profile |
+| `runbook` | local canonical runbooks and validation |
+| `security` | local dashboard, emergency watcher, recovery drafts |
+| `docs` | README plus focused docs under `docs/` |
+| `tests` | smoke tests plus golden failure fixtures |
+
+This dashboard is intentionally conservative. Mainnet readiness still depends on core, SDK, indexer, wallet handoff, audits, and live testnet evidence.
 
 ## Bridge Route Registry
 
@@ -763,6 +800,20 @@ Example:
 
 Use `connector_test_webhook` without `send=true` to preview the payload hash and endpoint before sending. `order_fulfill_webhook` and `booking_send_webhook` require explicit confirmation and record receipts/events. A successful webhook means the external service accepted the request; it is not final proof that goods or services were delivered.
 
+### Demo Connector Templates
+
+`demo_connector_templates`, `demo_connector_get`, and `demo_connector_draft` provide clearly marked TODO/demo stubs for product-specific integrations:
+
+- Stripe checkout;
+- Coinsbee-style gift cards;
+- travel booking;
+- food delivery;
+- service providers;
+- Agent Commerce Protocol;
+- Universal Commerce Protocol.
+
+Generated drafts are disabled by default and include TODO notes. Do not enable a real connector until provider terms, credentials, webhook verification, refund/dispute handling, and merchant policy are reviewed.
+
 ## Merchant Risk Controls
 
 Merchant policies are local MCP controls for agent-commerce safety. They do not modify the vendor registry or on-chain state.
@@ -861,4 +912,15 @@ Run:
 
 ```bash
 npm start
+```
+
+## Additional Docs
+
+Focused docs live in:
+
+```text
+docs/CLAUDE_CODE_EXAMPLES.md
+docs/OPERATOR_GUIDE.md
+docs/VENDOR_REGISTRY.md
+docs/RUNBOOK_GUIDE.md
 ```

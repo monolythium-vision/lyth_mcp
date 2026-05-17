@@ -1,0 +1,51 @@
+[
+  {
+    "name": "mempool encrypted envelope failure",
+    "input": {
+      "errorMessage": "lyth_submitEncrypted -32047: upstream unavailable: mempool: decryption failed",
+      "rpcMethod": "lyth_submitEncrypted",
+      "tool": "wallet_build_transfer"
+    },
+    "expected": {
+      "classification": "mempool_envelope_decryption",
+      "retryable": true
+    }
+  },
+  {
+    "name": "broadcast disabled",
+    "input": {
+      "errorMessage": "Broadcast disabled. Set LYTH_MCP_ENABLE_SUBMIT=1 to allow wallet_build_transfer broadcast.",
+      "tool": "wallet_build_transfer"
+    },
+    "expected": {
+      "classification": "broadcast_disabled",
+      "retryable": false
+    }
+  },
+  {
+    "name": "privacy denomination violation",
+    "input": {
+      "context": {
+        "violations": ["Private-denominated pLYTH cannot be used for commerce."]
+      }
+    },
+    "expected": {
+      "classification": "privacy_policy",
+      "retryable": false
+    }
+  },
+  {
+    "name": "bridge route blocked",
+    "input": {
+      "context": {
+        "quote": {
+          "violations": ["Route status is draft; this MCP will not treat it as executable."]
+        }
+      }
+    },
+    "expected": {
+      "classification": "bridge_route",
+      "retryable": false
+    }
+  }
+]
