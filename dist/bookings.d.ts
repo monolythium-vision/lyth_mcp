@@ -25,6 +25,8 @@ export interface BookingRecord {
     quote?: unknown;
     merchantRisk?: unknown;
     assetPolicy?: unknown;
+    commerceSafety?: unknown;
+    riskSummary?: unknown;
     runbookId?: string;
     escrow?: {
         runbookId?: string;

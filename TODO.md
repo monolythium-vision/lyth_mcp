@@ -241,12 +241,13 @@ Whitepaper refs: §10, §24.1-§24.13, §29.2.
 - [ ] **CORE SDK INDEXER** Arbiter registry tools.
   - `arbiter_search`, `arbiter_get`, `arbiter_register_draft`.
   - Filter single arbiter, quorum arbiter, human-required, credentials, availability, fee.
-- [ ] **MCP** Add anti-illicit-commerce frontend warnings.
+- [x] **MCP** Add anti-illicit-commerce frontend warnings.
   - Discovery listings can be on-chain and still hidden/flagged by client policy.
   - Arbiters may refuse illicit disputes.
   - MCP should not help source illegal services.
-- [ ] **MCP** Add provider/vendor onboarding wizard.
+- [x] **MCP** Add provider/vendor onboarding wizard.
   - Builds discovery listing, availability setup, fee schedule, credentials, accepted assets, webhook/API metadata.
+  - Implemented as `provider_onboarding_draft`; real signed/on-chain provider registry publishing remains TODO(mainnet).
 
 ## P5: MRC Assets, NFTs, Markets, And Native Commerce
 
@@ -420,8 +421,9 @@ Whitepaper refs: §27.8, §28.5, §99.3.
 - [ ] **MCP** Transaction explanation.
   - "Why did this transaction revert?"
   - Decode typed errors, policy failures, bridge failures, privacy cordon violations, and contract reverts.
-- [ ] **MCP** Plain-English risk renderer.
+- [x] **MCP** Plain-English risk renderer.
   - Every money-moving flow outputs risks, assumptions, policy basis, and retry/receipt path.
+  - Implemented as `risk_explain` plus integrated summaries in bridge quotes, merchant checks, order quotes/create/pay, booking creation, and provider onboarding drafts.
 
 ## P12: Vendor, Commerce, And Real-World Integration Layer
 

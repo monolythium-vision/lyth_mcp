@@ -205,6 +205,8 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `validate_runbook` | Check a runbook against spending policy and safety rules |
 | `prepare_wallet_request` | Prepare a wallet approval payload where supported |
 | `vendor_search` | Search a local vendor registry JSON |
+| `commerce_safety_check` | Check vendor/service/search text against local commerce safety policy |
+| `risk_explain` | Render a plain-English risk summary from MCP policy/preflight inputs |
 | `asset_registry_info` | Show local asset registry metadata and content hash |
 | `asset_search` | Search asset metadata and risk labels |
 | `asset_get` | Get one asset, risk labels, warnings, and bridge routes |
@@ -222,6 +224,7 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `liquidity_onboarding` | Explain how to bring an asset into Mono through configured routes |
 | `vendor_registry_info` | Show registry hashes, issuer, expiry, signature status, and categories |
 | `vendor_get` | Get one vendor by id |
+| `provider_onboarding_draft` | Draft vendor registry, merchant policy, availability, and connector metadata |
 | `connector_set` | Create or update an encrypted local webhook connector |
 | `connector_get` | Get one connector without revealing its secret |
 | `connector_list` | List local connectors without revealing secrets |
@@ -336,6 +339,14 @@ The asset registry labels:
 `privacy_policy_check` enforces the private-denomination cordon. Known private assets, such as `pLYTH`, are refused for commerce, service payments, escrow, bridges, staking, contracts, markets, discovery, and issuer registration. The same local policy is enforced by order creation, order payment preparation, booking creation, and bridge quotes.
 
 Use `contract_path_guidance` when a user asks to deploy Solidity or EVM bytecode. It returns the explicit no-EVM answer and points to the future Rust/RISC-V MRV contract path.
+
+## Commerce Safety And Risk Summaries
+
+`commerce_safety_check` applies a local client-side safety policy before vendor discovery, provider onboarding, orders, and bookings. It blocks obvious illicit-commerce requests and warns on restricted categories such as travel, gift cards, legal, medical, and regulated finance. This is not a protocol validity rule; it is a wallet/MCP guardrail so assistants do not help source illegal goods or services.
+
+`risk_explain` renders policy inputs into a Markdown summary with the operation, amount, counterparty, decision, violations, warnings, assumptions, receipt path, and retry path. The same renderer is now attached to bridge quotes, merchant checks, order quotes, order creation, order payment preparation, booking creation, and provider onboarding drafts.
+
+`provider_onboarding_draft` builds draft-only metadata for a future provider listing: local vendor registry record, merchant policy, availability placeholder, and optional webhook connector shape. It does not publish anything on-chain and includes `TODO(mainnet)` notes for real signed discovery metadata and provider verification.
 
 ## Bridge Route Registry
 
@@ -672,7 +683,7 @@ Typical flow:
 5. `order_fulfill_dry_run` for a demo, `order_fulfill_webhook` for a configured vendor connector, or `order_fulfill_manual` with a vendor confirmation/reference
 6. `order_receipt`
 
-Quotes and order creation include a local merchant-risk evaluation. If a vendor is denylisted, exceeds a configured cap, uses a blocked asset, or falls outside an allowed category, `order_create` and `order_pay` refuse the flow.
+Quotes and order creation include local merchant-risk, asset/privacy, commerce-safety, and plain-English risk summaries. If a vendor is denylisted, exceeds a configured cap, uses a blocked asset, falls outside an allowed category, or matches blocked commerce policy, `order_quote`, `order_create`, and `order_pay` refuse the flow.
 
 ## Fulfillment Connectors
 
@@ -711,7 +722,7 @@ Example:
 }
 ```
 
-Use `merchant_risk_check` before creating an order or booking when an assistant wants to explain policy basis, caps, notes, and refusal reasons in plain language.
+Use `merchant_risk_check` before creating an order or booking when an assistant wants to explain policy basis, caps, notes, commerce-safety status, and refusal reasons in plain language.
 
 ## Service Bookings
 
@@ -725,7 +736,7 @@ Typical flow:
 4. `booking_mark_paid` with an observed payment or escrow tx hash
 5. `booking_complete_dry_run`, `booking_dispute_demo`, or `booking_cancel`
 
-`booking_request_create` attaches a canonical `book_service` runbook draft. `booking_prepare_escrow` attaches a canonical `open_escrow` draft. Both enforce the same local merchant policy checks as orders.
+`booking_request_create` attaches a canonical `book_service` runbook draft. `booking_prepare_escrow` attaches a canonical `open_escrow` draft. Booking creation enforces the same local merchant, asset/privacy, commerce-safety, and risk-summary checks as orders.
 
 ## Invoices And Funding Requests
 

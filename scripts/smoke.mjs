@@ -18,6 +18,8 @@ const invoices = await import("../dist/invoices.js");
 const bridges = await import("../dist/bridges.js");
 const assets = await import("../dist/assets.js");
 const runbooks = await import("../dist/runbooks.js");
+const commerceSafety = await import("../dist/commerce_safety.js");
+const riskRenderer = await import("../dist/risk_renderer.js");
 
 function assert(condition, message) {
   if (!condition) {
@@ -130,6 +132,20 @@ assert(publicCommerce.ok === true, "expected public LYTH commerce to be allowed"
 assert(privateCommerce.ok === false && privateCommerce.code === "PrivacyDenominationViolation", "expected private LYTH commerce violation");
 assert(wrappedRisk.labels.includes("bridge_route"), "expected wrapped USDC bridge route label");
 
+const blockedCommerce = commerceSafety.evaluateCommerceSafety({ query: "buy stolen card" });
+const restrictedCommerce = commerceSafety.evaluateCommerceSafety({ category: "travel", service: "flight ticket" });
+const renderedRisk = riskRenderer.renderRisk({
+  title: "Smoke Risk",
+  operation: "smoke_test",
+  amount: "1",
+  asset: "LYTH",
+  commerceSafety: blockedCommerce,
+});
+assert(blockedCommerce.ok === false && blockedCommerce.clientAction === "hide_or_refuse", "expected illicit commerce request to be blocked");
+assert(restrictedCommerce.ok === true && restrictedCommerce.level === "warn", "expected restricted commerce request to warn");
+assert(renderedRisk.ok === false && renderedRisk.level === "blocked", "expected risk renderer to block unsafe commerce");
+assert(renderedRisk.markdown.includes("Decision: blocked"), "expected risk renderer markdown decision");
+
 const runbookList = await runbooks.listCanonicalRunbooks("./runbooks");
 assert(runbookList.length >= 9, "expected bundled canonical runbooks");
 
@@ -143,5 +159,6 @@ console.log(JSON.stringify({
   bridgeRoute: bridgeRoute.id,
   bridgeAlerts: bridgeAlerts.length,
   assets: assetRegistry.registry.assets.length,
+  blockedCommerce: blockedCommerce.level,
   runbooks: runbookList.length,
 }, null, 2));

@@ -21,11 +21,13 @@ import { addReceipt, getReceipt, listReceipts, receiptInfo, } from "./receipts.j
 import { buildConnectorHeaders, connectorPayloadHash, connectorStoreInfo, getConnector, listConnectors, redactConnector, removeConnector, resolveConnector, upsertConnector, } from "./connectors.js";
 import { bridgeCircuitBreakerAlerts, bridgeCooldownMatrix, bridgeRegistrySummary, bridgeStatusSummary, getBridgeRoute, listBridgeRoutes, loadBridgeRegistry, quoteBridgeRoute, selectBridgeRoute, } from "./bridges.js";
 import { assetRegistrySummary, assetRisk, evaluateAssetUseCase, getAsset, listAssets, loadAssetRegistry, privateDenominationWarning, } from "./assets.js";
+import { commerceSafetySummary } from "./commerce_safety.js";
 import { createOrder, getOrder, listOrders, orderStoreInfo, updateOrder, } from "./orders.js";
 import { bookingStoreInfo, createBooking, getBooking, listBookings, updateBooking, } from "./bookings.js";
 import { createInvoice, getInvoice, invoiceStoreInfo, listInvoices, updateInvoice, } from "./invoices.js";
 import { evaluateMerchantPolicy, getMerchantPolicy, listMerchantPolicies, merchantPolicyStoreInfo, removeMerchantPolicy, upsertMerchantPolicy, } from "./merchant_policy.js";
 import { diffRunbookContent, getCanonicalRunbook, listCanonicalRunbooks, } from "./runbooks.js";
+import { renderRisk } from "./risk_renderer.js";
 import { getVendor, loadVendorRegistry, quoteVendorOrder, searchVendors, vendorRegistrySummary, } from "./vendors.js";
 import { buildTransfer, configureLowValuePolicy, createWallet, deleteWallet, encryptionKeyFromRpc, exportMnemonic, importWallet, listWallets, moveLowValueAccounting, unitsToDecimal, updateAgentWalletMetadata, walletStoreInfo, } from "./wallet.js";
 const DEFAULT_CHAIN_ID = 69420;
@@ -839,6 +841,21 @@ async function evaluateAssetPolicy(symbol, useCase) {
         registry,
         policy: evaluateAssetUseCase(asset, useCase),
     };
+}
+function commerceSafetyForVendor(args) {
+    const vendor = args.vendor;
+    const description = typeof args.description === "string"
+        ? args.description
+        : args.description === undefined
+            ? undefined
+            : safeStringify(args.description);
+    return commerceSafetySummary({
+        query: args.query,
+        vendorId: args.vendorId ?? vendor?.id,
+        category: args.category ?? vendor?.category,
+        service: args.service ?? args.quote?.itemName ?? args.quote?.itemId ?? vendor?.displayName ?? vendor?.serviceTags?.join(" "),
+        description,
+    });
 }
 function outboxMethod(kind) {
     return kind === "eth_raw" ? "eth_sendRawTransaction" : "lyth_submitEncrypted";
@@ -2643,9 +2660,19 @@ server.tool("vendor_search", "Search the local vendor registry used by agent run
     category: z.string().optional(),
     limit: z.number().min(1).max(50).optional(),
 }, async ({ query, category, limit }) => {
+    const commerceSafety = commerceSafetyForVendor({ query, category });
+    if (!commerceSafety.ok) {
+        return errorJson({
+            ok: false,
+            commerceSafety,
+            vendors: [],
+            refusal: "Vendor search refused by local commerce safety policy.",
+        });
+    }
     const registry = await loadVendors();
     return text({
         registry: vendorRegistrySummary(registry),
+        commerceSafety,
         vendors: searchVendors(registry.registry, { query, category, limit }),
     });
 });
@@ -2767,6 +2794,33 @@ server.tool("private_denomination_warning", "Explain public/private LYTH separat
         warning: privateDenominationWarning(asset ?? undefined),
     });
 });
+server.tool("commerce_safety_check", "Check a vendor/service/search request against local anti-illicit-commerce policy before discovery, orders, or bookings.", {
+    query: z.string().optional(),
+    category: z.string().optional(),
+    service: z.string().optional(),
+    description: z.string().optional(),
+    vendorId: z.string().optional(),
+}, async (args) => {
+    const result = commerceSafetySummary(args);
+    return result.ok ? text(result) : errorJson(result);
+});
+server.tool("risk_explain", "Render a plain-English risk summary for a planned MCP action using policy, bridge, asset, commerce, and preflight inputs.", {
+    title: z.string().optional(),
+    operation: z.string().optional(),
+    amount: z.string().optional(),
+    asset: z.string().optional(),
+    counterparty: z.string().optional(),
+    merchantRisk: recordSchema,
+    assetPolicy: recordSchema,
+    bridgeQuote: recordSchema,
+    commerceSafety: recordSchema,
+    preflight: recordSchema,
+    receiptPath: z.string().optional(),
+    retryPath: z.string().optional(),
+}, async (args) => {
+    const summary = renderRisk(args);
+    return summary.ok ? text(summary) : errorJson(summary);
+});
 server.tool("contract_path_guidance", "Explain Monolythium's no-EVM contract path for Solidity/EVM/Rust/RISC-V requests.", {
     language: z.string().optional().describe("Example: Solidity, Rust, C, Move."),
     artifactType: z.string().optional().describe("Example: EVM bytecode, MRV package, WASM."),
@@ -2837,10 +2891,18 @@ server.tool("bridge_quote", "Preflight a bridge amount against route status, coo
     const registry = await loadBridgeRoutes();
     const assetPolicy = await evaluateAssetPolicy(asset, "bridge");
     if (!assetPolicy.policy.ok) {
+        const riskSummary = renderRisk({
+            title: "Bridge Quote Risk",
+            operation: "bridge_quote",
+            amount,
+            asset,
+            assetPolicy: assetPolicy.policy,
+        });
         return errorJson({
             ok: false,
             assetPolicy: assetPolicy.policy,
             assetRegistry: assetRegistrySummary(assetPolicy.registry),
+            riskSummary,
             refusal: "Bridge quote refused by local asset/privacy policy.",
         });
     }
@@ -2848,10 +2910,21 @@ server.tool("bridge_quote", "Preflight a bridge amount against route status, coo
         ? getBridgeRoute(registry.registry, routeId)
         : selectBridgeRoute(registry.registry, { asset, sourceChain, destinationChain });
     if (!route) {
-        return errorJson({
+        const bridgeQuote = {
             ok: false,
             violations: [`No bridge route found for ${asset}${sourceChain ? ` from ${sourceChain}` : ""}${destinationChain ? ` to ${destinationChain}` : ""}.`],
+        };
+        return errorJson({
+            ok: false,
+            violations: bridgeQuote.violations,
             registry: bridgeRegistrySummary(registry),
+            riskSummary: renderRisk({
+                title: "Bridge Quote Risk",
+                operation: "bridge_quote",
+                amount,
+                asset,
+                bridgeQuote,
+            }),
         });
     }
     const quote = quoteBridgeRoute(route, {
@@ -2859,9 +2932,18 @@ server.tool("bridge_quote", "Preflight a bridge amount against route status, coo
         asset,
         epochHours: registry.registry.epochHours,
     });
+    const riskSummary = renderRisk({
+        title: "Bridge Quote Risk",
+        operation: "bridge_quote",
+        amount,
+        asset,
+        counterparty: `${route.sourceChain}->${route.destinationChain}`,
+        assetPolicy: assetPolicy.policy,
+        bridgeQuote: quote,
+    });
     return quote.executable
-        ? text({ registry: bridgeRegistrySummary(registry), assetPolicy: assetPolicy.policy, quote })
-        : errorJson({ registry: bridgeRegistrySummary(registry), assetPolicy: assetPolicy.policy, quote });
+        ? text({ registry: bridgeRegistrySummary(registry), assetPolicy: assetPolicy.policy, quote, riskSummary })
+        : errorJson({ registry: bridgeRegistrySummary(registry), assetPolicy: assetPolicy.policy, quote, riskSummary });
 });
 server.tool("bridge_cooldown_matrix", "Show the configured cooldown matrix for IBC, zk-light-client, Bitcoin, Solana, Ethereum, and trusted routes.", {
     asset: z.string().optional(),
@@ -2944,13 +3026,135 @@ server.tool("vendor_get", "Get one vendor by id from the configured registry.", 
     const registry = await loadVendors();
     const vendor = getVendor(registry.registry, vendorId);
     const merchantRisk = await evaluateVendorRisk(vendor);
+    const commerceSafety = commerceSafetyForVendor({ vendor });
+    if (!commerceSafety.ok) {
+        return errorJson({
+            ok: false,
+            registry: vendorRegistrySummary(registry),
+            vendor,
+            merchantRisk,
+            commerceSafety,
+            refusal: "Vendor is hidden/refused by local commerce safety policy.",
+        });
+    }
     return text({
         registry: vendorRegistrySummary(registry),
         vendor,
         merchantRisk,
+        commerceSafety,
         warning: vendor.fulfillment?.type?.includes("demo")
             ? "This vendor uses demo fulfillment. No real goods or services are delivered."
             : undefined,
+    });
+});
+server.tool("provider_onboarding_draft", "Draft local vendor registry, merchant policy, availability, and connector metadata for a provider. Does not publish anything on-chain.", {
+    vendorId: z.string().min(1),
+    displayName: z.string().min(1),
+    category: z.string().min(1),
+    description: z.string().optional(),
+    address: z.string().optional(),
+    acceptedAssets: z.array(z.string().min(1)).optional(),
+    serviceTags: z.array(z.string().min(1)).optional(),
+    requiredFields: z.array(z.string().min(1)).optional(),
+    maxOrderAmount: z.string().optional(),
+    webhookEndpoint: z.string().url().optional(),
+    authMode: z.enum(["none", "bearer", "header", "hmac_sha256"]).optional(),
+    jurisdictionNotes: z.string().optional(),
+    refundPolicy: z.string().optional(),
+    fulfillmentSla: z.string().optional(),
+    credentialsRequired: z.array(z.string().min(1)).optional(),
+}, async (args) => {
+    if (args.address && !isAddress(args.address)) {
+        return errorText("address must be a 0x or mono1 address when supplied");
+    }
+    if (args.maxOrderAmount) {
+        decimalToUnits(args.maxOrderAmount);
+    }
+    const commerceSafety = commerceSafetyForVendor({
+        vendorId: args.vendorId,
+        category: args.category,
+        service: args.displayName,
+        description: [args.description, args.serviceTags?.join(" "), args.jurisdictionNotes].filter(Boolean).join("\n"),
+    });
+    if (!commerceSafety.ok) {
+        return errorJson({
+            ok: false,
+            commerceSafety,
+            refusal: "Provider onboarding draft refused by local commerce safety policy.",
+        });
+    }
+    const acceptedAssets = (args.acceptedAssets?.length ? args.acceptedAssets : ["LYTH"])
+        .map((asset) => asset.toUpperCase());
+    const vendorDraft = {
+        id: args.vendorId,
+        displayName: args.displayName,
+        category: args.category,
+        description: args.description,
+        address: args.address,
+        acceptedAssets,
+        maxOrderAmount: args.maxOrderAmount,
+        serviceTags: args.serviceTags,
+        fulfillment: {
+            type: args.webhookEndpoint ? "webhook_pending" : "manual_pending",
+            requiredFields: args.requiredFields ?? [],
+            endpointConfigured: Boolean(args.webhookEndpoint),
+        },
+        credentialsRequired: args.credentialsRequired,
+        todo: [
+            "TODO(onboarding): verify provider identity, credentials, refund policy, jurisdiction, and availability before production listing.",
+            "TODO(mainnet): publish signed/on-chain discovery metadata when the provider registry module exists.",
+        ],
+    };
+    const merchantPolicyDraft = {
+        vendorId: args.vendorId,
+        enabled: true,
+        allowlisted: false,
+        maxOrderAmount: args.maxOrderAmount,
+        allowedAssets: acceptedAssets,
+        allowedCategories: [args.category],
+        jurisdictionNotes: args.jurisdictionNotes,
+        refundPolicy: args.refundPolicy,
+        fulfillmentSla: args.fulfillmentSla,
+        riskNotes: "Drafted by MCP provider_onboarding_draft; review before allowlisting.",
+    };
+    const availabilityDraft = {
+        vendorId: args.vendorId,
+        status: "manual_setup_required",
+        serviceTags: args.serviceTags ?? [],
+        requiredFields: args.requiredFields ?? [],
+        todo: "TODO(core): replace with availability_update_draft once the provider availability module exists.",
+    };
+    const connectorDraft = args.webhookEndpoint
+        ? {
+            id: `${args.vendorId}-webhook`,
+            vendorId: args.vendorId,
+            displayName: `${args.displayName} webhook`,
+            endpoint: args.webhookEndpoint,
+            method: "POST",
+            enabled: false,
+            authMode: args.authMode ?? "hmac_sha256",
+            confirm: "STORE_CONNECTOR",
+        }
+        : undefined;
+    const riskSummary = renderRisk({
+        title: "Provider Onboarding Risk",
+        operation: "provider_onboarding_draft",
+        counterparty: args.displayName,
+        commerceSafety,
+    });
+    return text({
+        ok: true,
+        commerceSafety,
+        riskSummary,
+        vendorDraft,
+        merchantPolicyDraft,
+        availabilityDraft,
+        connectorDraft,
+        nextSteps: [
+            "Review the commerceSafety warnings before exposing the listing to users.",
+            "Apply merchant_policy_set before allowing agent spending.",
+            "Use connector_set only after real provider credentials are available.",
+        ],
     });
 });
 server.tool("connector_set", "Create or update a local encrypted webhook connector for a vendor.", {
@@ -3118,9 +3322,19 @@ server.tool("merchant_risk_check", "Evaluate vendor, amount, and asset against l
         amount: amount ?? quote?.amount,
         asset: asset ?? quote?.asset,
     });
-    return merchantRisk.ok
-        ? text({ registry: vendorRegistrySummary(registry), quote, merchantRisk })
-        : errorJson({ registry: vendorRegistrySummary(registry), quote, merchantRisk });
+    const commerceSafety = commerceSafetyForVendor({ vendor, quote, description: fulfillmentFields });
+    const riskSummary = renderRisk({
+        title: "Merchant Risk",
+        operation: "merchant_risk_check",
+        amount: amount ?? quote?.amount,
+        asset: asset ?? quote?.asset,
+        counterparty: vendor.displayName ?? vendor.id,
+        merchantRisk,
+        commerceSafety,
+    });
+    return merchantRisk.ok && commerceSafety.ok
+        ? text({ registry: vendorRegistrySummary(registry), quote, merchantRisk, commerceSafety, riskSummary })
+        : errorJson({ registry: vendorRegistrySummary(registry), quote, merchantRisk, commerceSafety, riskSummary });
 });
 server.tool("order_quote", "Quote a demo vendor catalog item. This does not create an order or spend funds.", {
     vendorId: z.string().min(1),
@@ -3132,13 +3346,27 @@ server.tool("order_quote", "Quote a demo vendor catalog item. This does not crea
     const { registry, vendor, quote } = await quoteOrder({ vendorId, itemId, quantity, asset, fulfillmentFields });
     const merchantRisk = await evaluateVendorRisk(vendor, quote);
     const assetPolicy = await evaluateAssetPolicy(quote.asset, "commerce");
-    return text({
+    const commerceSafety = commerceSafetyForVendor({ vendor, quote, description: fulfillmentFields });
+    const riskSummary = renderRisk({
+        title: "Order Quote Risk",
+        operation: "order_quote",
+        amount: quote.amount,
+        asset: quote.asset,
+        counterparty: quote.vendorDisplayName ?? quote.vendorId,
+        merchantRisk,
+        assetPolicy: assetPolicy.policy,
+        commerceSafety,
+    });
+    const payload = {
         registry: vendorRegistrySummary(registry),
         quote,
         merchantRisk,
         assetPolicy: assetPolicy.policy,
+        commerceSafety,
+        riskSummary,
         warning: "Quote only. No payment has been prepared and no vendor has been contacted.",
-    });
+    };
+    return assetPolicy.policy.ok && merchantRisk.ok && commerceSafety.ok ? text(payload) : errorJson(payload);
 });
 server.tool("order_create", "Create a local demo order from the vendor registry. This does not contact a real vendor or spend funds.", {
     vendorId: z.string().min(1),
@@ -3151,11 +3379,30 @@ server.tool("order_create", "Create a local demo order from the vendor registry.
     const { registry, vendor, quote } = await quoteOrder({ vendorId, itemId, quantity, asset, fulfillmentFields });
     const merchantRisk = await evaluateVendorRisk(vendor, quote);
     const assetPolicy = await evaluateAssetPolicy(quote.asset, "commerce");
+    const commerceSafety = commerceSafetyForVendor({
+        vendor,
+        quote,
+        description: { fulfillmentFields, notes },
+    });
+    const riskSummary = renderRisk({
+        title: "Order Creation Risk",
+        operation: "order_create",
+        amount: quote.amount,
+        asset: quote.asset,
+        counterparty: quote.vendorDisplayName ?? quote.vendorId,
+        merchantRisk,
+        assetPolicy: assetPolicy.policy,
+        commerceSafety,
+        receiptPath: "order_receipt",
+        retryPath: "tx_outbox_retry",
+    });
     if (!assetPolicy.policy.ok) {
         return errorJson({
             ok: false,
             quote,
             assetPolicy: assetPolicy.policy,
+            commerceSafety,
+            riskSummary,
             refusal: "Order creation refused by local asset/privacy policy.",
         });
     }
@@ -3164,7 +3411,20 @@ server.tool("order_create", "Create a local demo order from the vendor registry.
             ok: false,
             quote,
             merchantRisk,
+            commerceSafety,
+            riskSummary,
             refusal: "Order creation refused by local merchant policy.",
+        });
+    }
+    if (!commerceSafety.ok) {
+        return errorJson({
+            ok: false,
+            quote,
+            merchantRisk,
+            assetPolicy: assetPolicy.policy,
+            commerceSafety,
+            riskSummary,
+            refusal: "Order creation refused by local commerce safety policy.",
         });
     }
     const order = await createOrder({
@@ -3180,7 +3440,7 @@ server.tool("order_create", "Create a local demo order from the vendor registry.
         asset: quote.asset,
         registryHash: quote.registryHash,
         fulfillmentFields,
-        quote: { ...quote, merchantRisk, assetPolicy: assetPolicy.policy, notes },
+        quote: { ...quote, merchantRisk, assetPolicy: assetPolicy.policy, commerceSafety, riskSummary, notes },
     });
     const receipt = await addReceipt({
         kind: "order_create",
@@ -3199,6 +3459,8 @@ server.tool("order_create", "Create a local demo order from the vendor registry.
         order,
         merchantRisk,
         assetPolicy: assetPolicy.policy,
+        commerceSafety,
+        riskSummary,
         receipt,
         warning: "Local order only. No real vendor was contacted and no payment was sent.",
     });
@@ -3222,11 +3484,30 @@ server.tool("order_pay", "Prepare a pay_vendor runbook and optional wallet reque
         asset: order.asset,
     });
     const assetPolicy = await evaluateAssetPolicy(order.asset, "commerce");
+    const commerceSafety = commerceSafetyForVendor({
+        vendor,
+        service: order.itemName ?? order.itemId ?? order.vendorDisplayName,
+        description: order.fulfillmentFields,
+    });
+    const riskSummary = renderRisk({
+        title: "Order Payment Risk",
+        operation: "order_pay",
+        amount: order.amount,
+        asset: order.asset,
+        counterparty: order.vendorDisplayName ?? order.vendorId,
+        merchantRisk,
+        assetPolicy: assetPolicy.policy,
+        commerceSafety,
+        receiptPath: "order_receipt",
+        retryPath: "tx_outbox_retry",
+    });
     if (!assetPolicy.policy.ok) {
         return errorJson({
             ok: false,
             order,
             assetPolicy: assetPolicy.policy,
+            commerceSafety,
+            riskSummary,
             refusal: "Payment preparation refused by local asset/privacy policy.",
         });
     }
@@ -3235,7 +3516,20 @@ server.tool("order_pay", "Prepare a pay_vendor runbook and optional wallet reque
             ok: false,
             order,
             merchantRisk,
+            commerceSafety,
+            riskSummary,
             refusal: "Payment preparation refused by local merchant policy.",
+        });
+    }
+    if (!commerceSafety.ok) {
+        return errorJson({
+            ok: false,
+            order,
+            merchantRisk,
+            assetPolicy: assetPolicy.policy,
+            commerceSafety,
+            riskSummary,
+            refusal: "Payment preparation refused by local commerce safety policy.",
         });
     }
     const draft = await buildVerifiedRunbookDraft({
@@ -3285,6 +3579,8 @@ server.tool("order_pay", "Prepare a pay_vendor runbook and optional wallet reque
         order: updated,
         merchantRisk,
         assetPolicy: assetPolicy.policy,
+        commerceSafety,
+        riskSummary,
         draft,
         prepared,
         receipt,
@@ -3583,19 +3879,17 @@ server.tool("booking_request_create", "Create a local service-booking request an
     const finalAmount = amount ?? quote?.amount ?? "0";
     const finalAsset = String(asset ?? quote?.asset ?? vendor.acceptedAssets?.[0] ?? "LYTH").toUpperCase();
     decimalToUnits(finalAmount);
-    const assetPolicy = await evaluateAssetPolicy(finalAsset, "service_payment");
-    if (!assetPolicy.policy.ok) {
-        return errorJson({
-            ok: false,
-            assetPolicy: assetPolicy.policy,
-            quote,
-            refusal: "Booking creation refused by local asset/privacy policy.",
-        });
-    }
     const finalService = service ?? quote?.itemName ?? itemId ?? vendor.serviceTags?.[0];
     if (!finalService) {
         return errorText("service or itemId is required for a booking request");
     }
+    const assetPolicy = await evaluateAssetPolicy(finalAsset, "service_payment");
+    const commerceSafety = commerceSafetyForVendor({
+        vendor,
+        quote,
+        service: finalService,
+        description: { bookingFields, location, notes },
+    });
     const policy = await getMerchantPolicy(vendor.id);
     const merchantRisk = evaluateMerchantPolicy({
         vendor,
@@ -3604,12 +3898,49 @@ server.tool("booking_request_create", "Create a local service-booking request an
         amount: finalAmount,
         asset: finalAsset,
     });
+    const riskSummary = renderRisk({
+        title: "Booking Request Risk",
+        operation: "booking_request_create",
+        amount: finalAmount,
+        asset: finalAsset,
+        counterparty: vendor.displayName ?? vendorId,
+        merchantRisk,
+        assetPolicy: assetPolicy.policy,
+        commerceSafety,
+        receiptPath: "booking_status",
+        retryPath: "tx_outbox_retry",
+    });
+    if (!assetPolicy.policy.ok) {
+        return errorJson({
+            ok: false,
+            assetPolicy: assetPolicy.policy,
+            commerceSafety,
+            merchantRisk,
+            riskSummary,
+            quote,
+            refusal: "Booking creation refused by local asset/privacy policy.",
+        });
+    }
     if (!merchantRisk.ok) {
         return errorJson({
             ok: false,
             merchantRisk,
+            assetPolicy: assetPolicy.policy,
+            commerceSafety,
+            riskSummary,
             quote,
             refusal: "Booking creation refused by local merchant policy.",
+        });
+    }
+    if (!commerceSafety.ok) {
+        return errorJson({
+            ok: false,
+            merchantRisk,
+            assetPolicy: assetPolicy.policy,
+            commerceSafety,
+            riskSummary,
+            quote,
+            refusal: "Booking creation refused by local commerce safety policy.",
         });
     }
     const draft = await buildVerifiedRunbookDraft({
@@ -3647,6 +3978,8 @@ server.tool("booking_request_create", "Create a local service-booking request an
         quote: quote ?? { amount: finalAmount, asset: finalAsset, service: finalService },
         merchantRisk,
         assetPolicy: assetPolicy.policy,
+        commerceSafety,
+        riskSummary,
         runbookId: draft.id,
     });
     const receipt = await addReceipt({
@@ -3666,6 +3999,8 @@ server.tool("booking_request_create", "Create a local service-booking request an
         booking,
         merchantRisk,
         assetPolicy: assetPolicy.policy,
+        commerceSafety,
+        riskSummary,
         draft,
         receipt,
         warning: "Local booking request only. No real provider was contacted.",
