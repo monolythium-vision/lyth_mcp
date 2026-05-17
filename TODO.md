@@ -377,9 +377,10 @@ Whitepaper refs: §14, §20, §23, §28, §30.5.
   - `rpc_service_search`, `archive_service_search`, `prover_service_search`, `oracle_service_search`.
   - Show price, uptime, capacity, GPU class, proof latency, reputation.
   - Local MCP planning shim implemented for RPC/archive/prover/oracle search; live service-tier markets remain TODO(core/indexer).
-- [ ] **MCP** GPU proof market assistant.
+- [x] **MCP** GPU proof market assistant.
   - Route zkML/bridge proof requests to available prover services.
   - Show expected proof time, fee, and verifier status.
+  - Implemented as `gpu_proof_market_assistant` over local service-tier metadata; live proof job queue/verifier registry remains TODO(core/indexer).
 - [ ] **MCP** Monarch operator assistant.
   - Explain cluster health, 7-of-10 quorum, update status, open seats, resource pressure, service ROI.
   - Keep node-ops separate from consumer wallet UX.

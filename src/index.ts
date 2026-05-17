@@ -2796,7 +2796,7 @@ server.tool(
         result: explainError({ errorMessage: question, tool: "ask_chain" }),
       });
     }
-    if (/(status|health|sync|mempool|rpc health|rpc status)/i.test(question) && !/(cluster|operator|validator|prover|gpu|foundation|decentralization|decentralisation|stake|staking)/i.test(question)) {
+    if (/(status|health|sync|mempool|rpc health|rpc status)/i.test(question) && !/(cluster|operator|validator|prover|gpu|proof|zkml|foundation|decentralization|decentralisation|stake|staking)/i.test(question)) {
       const endpoint = await firstReachableEndpoint();
       const [stats, round, mempool, indexer, sync] = await Promise.allSettled([
         rpcCall(endpoint, "lyth_chainStats"),
@@ -2821,7 +2821,7 @@ server.tool(
         },
       });
     }
-    if (/(cluster|operator|validator|prover|gpu|foundation|decentralization|decentralisation|stake|staking|archive service|oracle service)/i.test(question)) {
+    if (/(cluster|operator|validator|prover|gpu|proof|zkml|foundation|decentralization|decentralisation|stake|staking|archive service|oracle service)/i.test(question)) {
       const registry = await loadClusters();
       const region = /\beu\b|europe/i.test(question)
         ? "EU"
@@ -2830,7 +2830,7 @@ server.tool(
           : /apac|asia|singapore/i.test(question)
             ? "APAC"
             : undefined;
-      const serviceType: ClusterServiceType | undefined = /prover|gpu/i.test(question)
+      const serviceType: ClusterServiceType | undefined = /prover|gpu|proof|zkml/i.test(question)
         ? "prover"
         : /archive/i.test(question)
           ? "archive"
@@ -2877,13 +2877,15 @@ server.tool(
         minOpenSeats: /open seat|operator|decentralization|decentralisation|stake|staking/i.test(question) ? 1 : undefined,
         limit: limit ?? 10,
       });
+      const proofType = /zkml/i.test(question) ? "zkml" : /bridge.*proof|proof.*bridge/i.test(question) ? "bridge" : /proof/i.test(question) ? "generic" : undefined;
       return asText({
         question,
         intent: serviceType ? `${serviceType}_service_search` : "cluster_search",
-        typedTool: serviceType === "prover" ? "prover_service_search" : serviceType ? `${serviceType}_service_search` : "cluster_search",
+        typedTool: proofType ? "gpu_proof_market_assistant" : serviceType === "prover" ? "prover_service_search" : serviceType ? `${serviceType}_service_search` : "cluster_search",
         sources: [{ type: "local_registry", path: CLUSTER_REGISTRY_PATH, hash: registry.contentHash }],
         result: {
           registry: clusterRegistrySummary(registry),
+          proofType,
           services: serviceResults,
           clusters: clusters.map((cluster) => ({
             ...cluster,
@@ -4386,6 +4388,70 @@ server.tool(
     limit: z.number().min(1).max(100).optional(),
   },
   async (args) => text(await serviceSearchResponse("prover", args)),
+);
+
+server.tool(
+  "gpu_proof_market_assistant",
+  "Route zkML, bridge, or generic proof requests to available local GPU prover service tiers with fee/latency assumptions.",
+  {
+    proofType: z.enum(["bridge", "zkml", "generic"]).optional(),
+    region: z.string().optional(),
+    gpuClass: z.string().optional(),
+    maxLatencyMs: z.number().min(1).optional(),
+    maxFeePerProof: z.string().optional(),
+    activeOnly: z.boolean().optional(),
+    limit: z.number().min(1).max(100).optional(),
+  },
+  async ({ proofType, region, gpuClass, maxLatencyMs, maxFeePerProof, activeOnly, limit }) => {
+    if (maxFeePerProof) {
+      decimalToUnits(maxFeePerProof);
+    }
+    const registry = await loadClusters();
+    const services = searchServices(registry.registry, {
+      serviceType: "prover",
+      region,
+      gpuClass,
+      maxLatencyMs,
+      activeOnly: activeOnly ?? true,
+      limit: limit ?? 10,
+    }).filter((entry) => {
+      const fee = entry.service.pricePerProof;
+      return !maxFeePerProof || !fee || decimalToUnits(fee) <= decimalToUnits(maxFeePerProof);
+    });
+    const proofMultiplier = proofType === "zkml" ? 3 : proofType === "bridge" ? 1.5 : 1;
+    return text({
+      registry: clusterRegistrySummary(registry),
+      proofType: proofType ?? "generic",
+      filters: { region, gpuClass, maxLatencyMs, maxFeePerProof, activeOnly: activeOnly ?? true },
+      recommendations: services.map((entry) => ({
+        clusterId: entry.clusterId,
+        clusterDisplayName: entry.clusterDisplayName,
+        region: entry.region,
+        foundationControlled: entry.foundationControlled,
+        service: entry.service,
+        estimatedProofTimeMsP50: entry.service.proofLatencyMsP50
+          ? Math.round(entry.service.proofLatencyMsP50 * proofMultiplier)
+          : undefined,
+        estimatedFee: entry.service.pricePerProof
+          ? {
+              amount: entry.service.pricePerProof,
+              asset: entry.service.asset ?? "LYTH",
+              note: proofType === "zkml" ? "zkML pricing likely needs model-size multipliers; this is a placeholder estimate." : undefined,
+            }
+          : undefined,
+        reputation: entry.reputation,
+      })),
+      verifierStatus: {
+        bridge: proofType === "bridge" ? "Use only after the bridge verifier/precompile and route circuit are audited." : undefined,
+        zkml: proofType === "zkml" ? "TODO(mainnet): connect to zkML verifier registry and model attestation metadata." : undefined,
+        generic: proofType === "generic" || !proofType ? "Generic proof requests need a verifier id before production routing." : undefined,
+      },
+      warnings: [
+        "This is local planning metadata. It does not reserve prover capacity or submit a proof job.",
+        "TODO(mainnet): replace with live service-tier market, proof job queue, verifier registry, and signed SLA data.",
+      ],
+    });
+  },
 );
 
 server.tool(
