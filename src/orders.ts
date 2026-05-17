@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 
 const STORE_VERSION = 1;
 
-export type OrderStatus = "created" | "payment_prepared" | "paid" | "fulfilled_demo" | "cancelled";
+export type OrderStatus = "created" | "payment_prepared" | "paid" | "fulfilled_demo" | "fulfilled_manual" | "cancelled";
 
 export interface OrderEvent {
   at: string;
@@ -38,9 +38,10 @@ export interface OrderRecord {
     preparedAt?: string;
   };
   fulfillment?: {
-    adapter: "dry_run";
+    adapter: "dry_run" | "manual";
     confirmation: string;
     fulfilledAt: string;
+    note?: string;
   };
   cancelReason?: string;
   events: OrderEvent[];

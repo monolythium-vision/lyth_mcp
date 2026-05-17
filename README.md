@@ -154,7 +154,9 @@ examples/claude_desktop_config.json
 | `LYTH_MCP_OUTBOX` | `~/.lyth_mcp/outbox.json` | Local signed-payload outbox for retrying without rebuilding/re-signing |
 | `LYTH_MCP_RECEIPTS` | `~/.lyth_mcp/receipts.json` | Local receipt store for drafted/signed/submitted/failed operations |
 | `LYTH_MCP_ORDER_STORE` | `~/.lyth_mcp/orders.json` | Local demo order lifecycle store |
+| `LYTH_MCP_BOOKING_STORE` | `~/.lyth_mcp/bookings.json` | Local service-booking lifecycle store |
 | `LYTH_MCP_INVOICE_STORE` | `~/.lyth_mcp/invoices.json` | Local invoice and funding-request store |
+| `LYTH_MCP_MERCHANT_POLICY_STORE` | `~/.lyth_mcp/merchant_policies.json` | Local per-vendor allow/deny/cap/risk policy store |
 | `LYTH_MCP_RUNBOOK_REGISTRY` | bundled `runbooks/` | Local canonical runbook registry path |
 | `LYTH_MCP_WALLET_PASSPHRASE` | unset | Optional env passphrase for unattended passphrase signing; safer to pass per call |
 | `LYTH_MCP_DEFAULT_LOW_VALUE_MAX` | `10` | Default LYTH per-transaction cap for passphrase-less wallets |
@@ -201,6 +203,11 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `vendor_search` | Search a local vendor registry JSON |
 | `vendor_registry_info` | Show registry hashes, issuer, expiry, signature status, and categories |
 | `vendor_get` | Get one vendor by id |
+| `merchant_policy_set` | Create or update local merchant risk controls |
+| `merchant_policy_get` | Get one vendor's local merchant policy and risk view |
+| `merchant_policy_list` | List local merchant policies |
+| `merchant_policy_remove` | Remove one local merchant policy |
+| `merchant_risk_check` | Evaluate a vendor/amount/asset before creating an order |
 | `order_quote` | Quote a demo vendor catalog item |
 | `order_create` | Create a local demo order |
 | `order_pay` | Prepare a pay_vendor runbook and optional wallet request for an order |
@@ -210,6 +217,16 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `order_receipt` | Export a local order receipt |
 | `order_cancel` | Cancel a local order before dry-run fulfillment |
 | `order_fulfill_dry_run` | Mark a local demo order fulfilled without contacting a real vendor |
+| `order_fulfill_manual` | Mark a local order fulfilled from manual vendor evidence |
+| `booking_request_create` | Create a local service-booking request and `book_service` runbook draft |
+| `booking_accept_demo` | Mark a booking accepted by a demo provider |
+| `booking_prepare_escrow` | Prepare an `open_escrow` runbook draft for a booking |
+| `booking_mark_paid` | Mark a booking paid with an observed tx hash |
+| `booking_complete_dry_run` | Mark a booking completed by dry-run fulfillment |
+| `booking_dispute_demo` | Open a local demo dispute for a booking |
+| `booking_status` | Get one local booking |
+| `booking_list` | List local bookings |
+| `booking_cancel` | Cancel a local booking before completion |
 | `invoice_create` | Create a local invoice requesting payment |
 | `funding_request_create` | Create a local agent funding request |
 | `invoice_status` | Get a local invoice/funding request |
@@ -382,7 +399,7 @@ Signed payloads are now also written to the local outbox. Prefer retrying with `
 }
 ```
 
-Use `mcp_dashboard` when you want a Claude Code-friendly Markdown view of wallets, outbox entries, and receipts.
+Use `mcp_dashboard` when you want a Claude Code-friendly Markdown view of wallets, outbox entries, receipts, orders, bookings, invoices, and merchant policies.
 
 Before signing a payment, the MCP now runs transfer preflight checks. You can call the same checks directly:
 
@@ -583,8 +600,44 @@ Typical flow:
 2. `order_create`
 3. `order_pay`
 4. `order_mark_paid` with an observed tx hash, or continue as payment-prepared in a dry run
-5. `order_fulfill_dry_run`
+5. `order_fulfill_dry_run` for a demo, or `order_fulfill_manual` with a vendor confirmation/reference
 6. `order_receipt`
+
+Quotes and order creation include a local merchant-risk evaluation. If a vendor is denylisted, exceeds a configured cap, uses a blocked asset, or falls outside an allowed category, `order_create` and `order_pay` refuse the flow.
+
+## Merchant Risk Controls
+
+Merchant policies are local MCP controls for agent-commerce safety. They do not modify the vendor registry or on-chain state.
+
+Example:
+
+```json
+{
+  "vendorId": "pizza-demo",
+  "allowlisted": true,
+  "maxOrderAmount": "15",
+  "allowedAssets": ["LYTH"],
+  "allowedCategories": ["food"],
+  "refundPolicy": "Demo refunds are manual.",
+  "fulfillmentSla": "30 minutes in demo text only."
+}
+```
+
+Use `merchant_risk_check` before creating an order or booking when an assistant wants to explain policy basis, caps, notes, and refusal reasons in plain language.
+
+## Service Bookings
+
+Bookings model the service side of agent commerce: a plumber request, travel request, legal review, food delivery request, or similar external service. They are local workflow records until real vendor connectors and escrow modules exist.
+
+Typical flow:
+
+1. `booking_request_create`
+2. `booking_accept_demo`
+3. `booking_prepare_escrow` when the service needs deliverable-based payment
+4. `booking_mark_paid` with an observed payment or escrow tx hash
+5. `booking_complete_dry_run`, `booking_dispute_demo`, or `booking_cancel`
+
+`booking_request_create` attaches a canonical `book_service` runbook draft. `booking_prepare_escrow` attaches a canonical `open_escrow` draft. Both enforce the same local merchant policy checks as orders.
 
 ## Invoices And Funding Requests
 

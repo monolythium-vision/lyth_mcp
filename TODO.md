@@ -433,22 +433,25 @@ Whitepaper refs: §10, §18, §24, §27.7.
 - [ ] **CORE SDK INDEXER** Bind vendor registry to on-chain discovery registry when available.
 - [ ] **MCP** Vendor fulfillment adapters.
   - Dry-run adapter is implemented via `order_fulfill_dry_run`.
+  - Manual confirmation adapter is implemented via `order_fulfill_manual`.
   - Webhook adapter.
   - API-key adapter with local secret store.
-  - Manual confirmation adapter.
 - [x] **MCP** Order lifecycle.
   - `order_quote`, `order_create`, `order_pay`, `order_status`, `order_receipt`, `order_cancel`.
   - For now, demo only; production requires real vendor terms and fulfillment hooks.
 - [x] **MCP** Invoices and funding requests.
   - `invoice_create`, `invoice_status`, `funding_request_create`.
   - Let agent say: "Send 50 USDC/LYTH here for this task; expires at X."
-- [ ] **MCP** Service booking.
-  - Booking request, provider acceptance, escrow funding, deliverable tracking, dispute path.
+- [x] **MCP** Service booking.
+  - `booking_request_create`, `booking_accept_demo`, `booking_prepare_escrow`, `booking_mark_paid`, `booking_complete_dry_run`, `booking_dispute_demo`, `booking_cancel`.
+  - Local workflow only; production requires real provider connectors and live escrow integration.
 - [ ] **MCP** External commerce connectors.
   - Stripe/agent-commerce protocol style connectors if appropriate.
   - Coinsbee-style gift-card connector only with official API credentials and clear legal/compliance posture.
   - Travel/food/service connectors through vendor-approved integrations.
-- [ ] **MCP** Merchant risk controls.
+- [x] **MCP** Merchant risk controls.
+  - `merchant_policy_set/get/list/remove`, `merchant_risk_check`.
+  - Enforced by `order_create`, `order_pay`, and `booking_request_create`.
   - Per-vendor caps, allowlist, denylist, jurisdiction notes, refund policy, fulfillment SLA, dispute process.
 
 ## P13: Mainnet Readiness Gates For MCP

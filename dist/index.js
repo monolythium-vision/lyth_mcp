@@ -19,7 +19,9 @@ import { addressbookInfo, listAddressbookContacts, removeAddressbookContact, res
 import { addOutboxEntry, forgetOutboxEntry, getOutboxEntry, listOutboxEntries, outboxInfo, recordOutboxAttempt, updateOutboxStatus, } from "./outbox.js";
 import { addReceipt, getReceipt, listReceipts, receiptInfo, } from "./receipts.js";
 import { createOrder, getOrder, listOrders, orderStoreInfo, updateOrder, } from "./orders.js";
+import { bookingStoreInfo, createBooking, getBooking, listBookings, updateBooking, } from "./bookings.js";
 import { createInvoice, getInvoice, invoiceStoreInfo, listInvoices, updateInvoice, } from "./invoices.js";
+import { evaluateMerchantPolicy, getMerchantPolicy, listMerchantPolicies, merchantPolicyStoreInfo, removeMerchantPolicy, upsertMerchantPolicy, } from "./merchant_policy.js";
 import { diffRunbookContent, getCanonicalRunbook, listCanonicalRunbooks, } from "./runbooks.js";
 import { getVendor, loadVendorRegistry, quoteVendorOrder, searchVendors, vendorRegistrySummary, } from "./vendors.js";
 import { buildTransfer, configureLowValuePolicy, createWallet, deleteWallet, encryptionKeyFromRpc, exportMnemonic, importWallet, listWallets, moveLowValueAccounting, unitsToDecimal, updateAgentWalletMetadata, walletStoreInfo, } from "./wallet.js";
@@ -757,6 +759,7 @@ async function quoteOrder(args) {
     const vendor = getVendor(registry.registry, args.vendorId);
     return {
         registry,
+        vendor,
         quote: quoteVendorOrder({
             registryHash: registry.payloadHash,
             vendor,
@@ -766,6 +769,10 @@ async function quoteOrder(args) {
             fulfillmentFields: args.fulfillmentFields,
         }),
     };
+}
+async function evaluateVendorRisk(vendor, quote) {
+    const policy = await getMerchantPolicy(vendor.id);
+    return evaluateMerchantPolicy({ vendor, quote, policy });
 }
 function outboxMethod(kind) {
     return kind === "eth_raw" ? "eth_sendRawTransaction" : "lyth_submitEncrypted";
@@ -1045,7 +1052,8 @@ const runbookEnum = z.enum([
 ]);
 const outboxStatusEnum = z.enum(["signed", "submitted", "confirmed", "failed", "expired"]);
 const receiptStatusEnum = z.enum(["drafted", "signed", "submitted", "confirmed", "failed"]);
-const orderStatusEnum = z.enum(["created", "payment_prepared", "paid", "fulfilled_demo", "cancelled"]);
+const orderStatusEnum = z.enum(["created", "payment_prepared", "paid", "fulfilled_demo", "fulfilled_manual", "cancelled"]);
+const bookingStatusEnum = z.enum(["requested", "accepted_demo", "escrow_prepared", "paid", "completed_demo", "cancelled", "disputed_demo"]);
 const invoiceStatusEnum = z.enum(["open", "paid", "cancelled", "expired"]);
 const recordSchema = z.record(z.unknown()).optional();
 const policySchema = z.object({
@@ -1112,7 +1120,9 @@ server.tool("mcp_self_check", "Check MCP install, config, stores, and RPC reacha
             outbox: await outboxInfo(),
             receipts: await receiptInfo(),
             orders: await orderStoreInfo(),
+            bookings: await bookingStoreInfo(),
             invoices: await invoiceStoreInfo(),
+            merchantPolicies: await merchantPolicyStoreInfo(),
             vendorRegistry: VENDOR_REGISTRY_PATH,
             runbookRegistry: RUNBOOK_REGISTRY_PATH,
         },
@@ -2425,14 +2435,18 @@ server.tool("mcp_dashboard", "Render a compact Markdown dashboard for Claude Cod
     const outbox = await listOutboxEntries({ limit: 10 });
     const receipts = await listReceipts({ limit: 10 });
     const orders = await listOrders({ limit: 10 });
+    const bookings = await listBookings({ limit: 10 });
     const invoices = await listInvoices({ limit: 10 });
+    const merchantPolicies = await listMerchantPolicies({ limit: 10 });
     const contacts = await listAddressbookContacts();
     const walletInfo = await walletStoreInfo();
     const contactInfo = await addressbookInfo();
     const outboxStore = await outboxInfo();
     const receiptStore = await receiptInfo();
     const orderStore = await orderStoreInfo();
+    const bookingStore = await bookingStoreInfo();
     const invoiceStore = await invoiceStoreInfo();
+    const merchantPolicyStore = await merchantPolicyStoreInfo();
     const lines = [
         "# Lyth MCP Dashboard",
         "",
@@ -2445,7 +2459,9 @@ server.tool("mcp_dashboard", "Render a compact Markdown dashboard for Claude Cod
             ["Outbox", String(outboxStore.entryCount), outboxStore.path],
             ["Receipts", String(receiptStore.receiptCount), receiptStore.path],
             ["Orders", String(orderStore.orderCount), orderStore.path],
+            ["Bookings", String(bookingStore.bookingCount), bookingStore.path],
             ["Invoices", String(invoiceStore.invoiceCount), invoiceStore.path],
+            ["Merchant Policies", String(merchantPolicyStore.policyCount), merchantPolicyStore.path],
         ]),
         "",
         "## Wallets",
@@ -2492,7 +2508,15 @@ server.tool("mcp_dashboard", "Render a compact Markdown dashboard for Claude Cod
                 order.itemName ?? order.itemId ?? "",
                 `${order.amount} ${order.asset}`,
             ]))
-            : "No orders.", "", "## Invoices", invoices.length
+            : "No orders.", "", "## Bookings", bookings.length
+            ? mdTable(["ID", "Status", "Vendor", "Service", "Amount"], bookings.map((booking) => [
+                booking.id,
+                booking.status,
+                booking.vendorDisplayName ?? booking.vendorId,
+                booking.service,
+                `${booking.amount} ${booking.asset}`,
+            ]))
+            : "No bookings.", "", "## Invoices", invoices.length
             ? mdTable(["ID", "Type", "Status", "Amount", "Recipient"], invoices.map((invoice) => [
                 invoice.id,
                 invoice.type,
@@ -2500,7 +2524,16 @@ server.tool("mcp_dashboard", "Render a compact Markdown dashboard for Claude Cod
                 `${invoice.amount} ${invoice.asset}`,
                 short(invoice.recipient),
             ]))
-            : "No invoices.");
+            : "No invoices.", "", "## Merchant Policies", merchantPolicies.length
+            ? mdTable(["Vendor", "Enabled", "Allow", "Deny", "Cap", "Assets"], merchantPolicies.map((policy) => [
+                policy.vendorId,
+                policy.enabled ? "yes" : "no",
+                policy.allowlisted ? "yes" : "",
+                policy.denylisted ? "yes" : "",
+                policy.maxOrderAmount ?? "",
+                policy.allowedAssets?.join(",") ?? "",
+            ]))
+            : "No merchant policies.");
     }
     return { content: [{ type: "text", text: lines.join("\n") }] };
 });
@@ -2524,13 +2557,98 @@ server.tool("vendor_get", "Get one vendor by id from the configured registry.", 
 }, async ({ vendorId }) => {
     const registry = await loadVendors();
     const vendor = getVendor(registry.registry, vendorId);
+    const merchantRisk = await evaluateVendorRisk(vendor);
     return text({
         registry: vendorRegistrySummary(registry),
         vendor,
+        merchantRisk,
         warning: vendor.fulfillment?.type?.includes("demo")
             ? "This vendor uses demo fulfillment. No real goods or services are delivered."
             : undefined,
     });
+});
+server.tool("merchant_policy_set", "Create or update local merchant risk controls for a vendor.", {
+    vendorId: z.string().min(1),
+    enabled: z.boolean().optional().describe("Whether the policy enforces allow/deny/cap checks. Default true."),
+    allowlisted: z.boolean().optional(),
+    denylisted: z.boolean().optional(),
+    maxOrderAmount: z.string().optional().describe("Maximum local order amount for this vendor."),
+    allowedAssets: z.array(z.string().min(1)).optional(),
+    allowedCategories: z.array(z.string().min(1)).optional(),
+    jurisdictionNotes: z.string().optional(),
+    refundPolicy: z.string().optional(),
+    fulfillmentSla: z.string().optional(),
+    disputeProcess: z.string().optional(),
+    riskNotes: z.string().optional(),
+}, async (args) => {
+    const registry = await loadVendors();
+    const vendor = getVendor(registry.registry, args.vendorId);
+    const policy = await upsertMerchantPolicy(args);
+    const merchantRisk = evaluateMerchantPolicy({ vendor, policy });
+    return text({
+        policy,
+        merchantRisk,
+        registry: vendorRegistrySummary(registry),
+        warning: "This is a local MCP policy. It controls MCP order creation, not the on-chain vendor registry.",
+    });
+});
+server.tool("merchant_policy_get", "Get local merchant policy and risk status for a vendor.", {
+    vendorId: z.string().min(1),
+}, async ({ vendorId }) => {
+    const registry = await loadVendors();
+    const vendor = getVendor(registry.registry, vendorId);
+    const policy = await getMerchantPolicy(vendorId);
+    return text({
+        policy,
+        merchantRisk: evaluateMerchantPolicy({ vendor, policy }),
+    });
+});
+server.tool("merchant_policy_list", "List local merchant policies.", {
+    vendorId: z.string().optional(),
+    onlyBlocked: z.boolean().optional(),
+    limit: z.number().min(1).max(200).optional(),
+}, async ({ vendorId, onlyBlocked, limit }) => text({
+    store: await merchantPolicyStoreInfo(),
+    policies: await listMerchantPolicies({ vendorId, onlyBlocked, limit }),
+}));
+server.tool("merchant_policy_remove", "Remove a local merchant policy for a vendor.", {
+    vendorId: z.string().min(1),
+    confirm: z.literal("REMOVE_MERCHANT_POLICY"),
+}, async ({ vendorId }) => text(await removeMerchantPolicy(vendorId)));
+server.tool("merchant_risk_check", "Evaluate vendor, amount, and asset against local merchant risk policy without creating an order.", {
+    vendorId: z.string().min(1),
+    itemId: z.string().optional(),
+    quantity: z.number().int().min(1).max(100).optional(),
+    amount: z.string().optional().describe("Optional direct amount when not quoting a catalog item."),
+    asset: z.string().optional(),
+    fulfillmentFields: recordSchema,
+}, async ({ vendorId, itemId, quantity, amount, asset, fulfillmentFields }) => {
+    if (amount) {
+        decimalToUnits(amount);
+    }
+    const registry = await loadVendors();
+    const vendor = getVendor(registry.registry, vendorId);
+    const policy = await getMerchantPolicy(vendor.id);
+    const quote = itemId || quantity || !amount
+        ? quoteVendorOrder({
+            registryHash: registry.payloadHash,
+            vendor,
+            itemId,
+            quantity,
+            asset,
+            fulfillmentFields,
+        })
+        : undefined;
+    const merchantRisk = evaluateMerchantPolicy({
+        vendor,
+        quote,
+        policy,
+        amount: amount ?? quote?.amount,
+        asset: asset ?? quote?.asset,
+    });
+    return merchantRisk.ok
+        ? text({ registry: vendorRegistrySummary(registry), quote, merchantRisk })
+        : errorJson({ registry: vendorRegistrySummary(registry), quote, merchantRisk });
 });
 server.tool("order_quote", "Quote a demo vendor catalog item. This does not create an order or spend funds.", {
     vendorId: z.string().min(1),
@@ -2539,10 +2657,12 @@ server.tool("order_quote", "Quote a demo vendor catalog item. This does not crea
     asset: z.string().optional(),
     fulfillmentFields: recordSchema.describe("Fulfillment fields such as deliveryAddress, email, phone, routeId."),
 }, async ({ vendorId, itemId, quantity, asset, fulfillmentFields }) => {
-    const { registry, quote } = await quoteOrder({ vendorId, itemId, quantity, asset, fulfillmentFields });
+    const { registry, vendor, quote } = await quoteOrder({ vendorId, itemId, quantity, asset, fulfillmentFields });
+    const merchantRisk = await evaluateVendorRisk(vendor, quote);
     return text({
         registry: vendorRegistrySummary(registry),
         quote,
+        merchantRisk,
         warning: "Quote only. No payment has been prepared and no vendor has been contacted.",
     });
 });
@@ -2554,7 +2674,16 @@ server.tool("order_create", "Create a local demo order from the vendor registry.
     fulfillmentFields: recordSchema,
     notes: z.string().optional(),
 }, async ({ vendorId, itemId, quantity, asset, fulfillmentFields, notes }) => {
-    const { registry, quote } = await quoteOrder({ vendorId, itemId, quantity, asset, fulfillmentFields });
+    const { registry, vendor, quote } = await quoteOrder({ vendorId, itemId, quantity, asset, fulfillmentFields });
+    const merchantRisk = await evaluateVendorRisk(vendor, quote);
+    if (!merchantRisk.ok) {
+        return errorJson({
+            ok: false,
+            quote,
+            merchantRisk,
+            refusal: "Order creation refused by local merchant policy.",
+        });
+    }
     const order = await createOrder({
         network: NETWORK,
         chainId: CHAIN_ID,
@@ -2568,7 +2697,7 @@ server.tool("order_create", "Create a local demo order from the vendor registry.
         asset: quote.asset,
         registryHash: quote.registryHash,
         fulfillmentFields,
-        quote: { ...quote, notes },
+        quote: { ...quote, merchantRisk, notes },
     });
     const receipt = await addReceipt({
         kind: "order_create",
@@ -2585,6 +2714,7 @@ server.tool("order_create", "Create a local demo order from the vendor registry.
     return text({
         registry: vendorRegistrySummary(registry),
         order,
+        merchantRisk,
         receipt,
         warning: "Local order only. No real vendor was contacted and no payment was sent.",
     });
@@ -2597,6 +2727,23 @@ server.tool("order_pay", "Prepare a pay_vendor runbook and optional wallet reque
     const order = await getOrder(orderId);
     if (order.status === "cancelled") {
         return errorText(`order '${orderId}' is cancelled`);
+    }
+    const registry = await loadVendors();
+    const vendor = getVendor(registry.registry, order.vendorId);
+    const policy = await getMerchantPolicy(order.vendorId);
+    const merchantRisk = evaluateMerchantPolicy({
+        vendor,
+        policy,
+        amount: order.amount,
+        asset: order.asset,
+    });
+    if (!merchantRisk.ok) {
+        return errorJson({
+            ok: false,
+            order,
+            merchantRisk,
+            refusal: "Payment preparation refused by local merchant policy.",
+        });
     }
     const draft = await buildVerifiedRunbookDraft({
         runbook: "pay_vendor",
@@ -2643,6 +2790,7 @@ server.tool("order_pay", "Prepare a pay_vendor runbook and optional wallet reque
     });
     return text({
         order: updated,
+        merchantRisk,
         draft,
         prepared,
         receipt,
@@ -2694,8 +2842,8 @@ server.tool("order_cancel", "Cancel a local order if it has not been fulfilled."
     confirm: z.literal("CANCEL_ORDER"),
 }, async ({ orderId, reason }) => {
     const current = await getOrder(orderId);
-    if (current.status === "fulfilled_demo") {
-        return errorText("fulfilled demo orders cannot be cancelled");
+    if (current.status === "fulfilled_demo" || current.status === "fulfilled_manual") {
+        return errorText("fulfilled orders cannot be cancelled");
     }
     const order = await updateOrder(orderId, {
         status: "cancelled",
@@ -2713,6 +2861,9 @@ server.tool("order_fulfill_dry_run", "Mark a local demo order fulfilled by a dry
     const current = await getOrder(orderId);
     if (current.status === "cancelled") {
         return errorText("cancelled orders cannot be fulfilled");
+    }
+    if (current.status === "fulfilled_demo" || current.status === "fulfilled_manual") {
+        return errorText("fulfilled orders cannot be fulfilled again");
     }
     const confirmation = `dryrun_${Date.now()}_${randomUUID().slice(0, 8)}`;
     const order = await updateOrder(orderId, {
@@ -2744,6 +2895,348 @@ server.tool("order_fulfill_dry_run", "Mark a local demo order fulfilled by a dry
         receipt,
         warning: "Dry-run fulfillment only. No real goods, food, tickets, services, or gift cards were delivered.",
     });
+});
+server.tool("order_fulfill_manual", "Mark a local order fulfilled after manual vendor confirmation. This records evidence but does not call an external API.", {
+    orderId: z.string().min(1),
+    confirmation: z.string().min(1).describe("Vendor confirmation code, receipt id, email reference, or manual evidence id."),
+    note: z.string().optional(),
+    confirm: z.literal("FULFILL_MANUAL"),
+}, async ({ orderId, confirmation, note }) => {
+    const current = await getOrder(orderId);
+    if (current.status === "cancelled") {
+        return errorText("cancelled orders cannot be fulfilled");
+    }
+    if (current.status === "fulfilled_demo" || current.status === "fulfilled_manual") {
+        return errorText("fulfilled orders cannot be fulfilled again");
+    }
+    const order = await updateOrder(orderId, {
+        status: "fulfilled_manual",
+        fulfillment: {
+            adapter: "manual",
+            confirmation,
+            fulfilledAt: new Date().toISOString(),
+            note,
+        },
+    }, {
+        type: "fulfilled_manual",
+        data: { confirmation },
+        note,
+    });
+    const receipt = await addReceipt({
+        kind: "order_fulfill_manual",
+        status: "confirmed",
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        title: `Manually fulfilled order ${order.id}`,
+        summary: `${order.vendorDisplayName ?? order.vendorId}: ${confirmation}`,
+        to: order.vendorAddress,
+        amount: order.amount,
+        asset: order.asset,
+        result: order,
+    });
+    return text({
+        order,
+        receipt,
+        warning: "Manual fulfillment records evidence supplied to the MCP. It does not prove vendor-side delivery unless backed by a real connector or external receipt.",
+    });
+});
+server.tool("booking_request_create", "Create a local service-booking request and canonical book_service runbook draft.", {
+    vendorId: z.string().min(1),
+    service: z.string().optional().describe("Requested service, e.g. plumber, flight ticket, pizza delivery."),
+    itemId: z.string().optional().describe("Optional vendor catalog item to price the booking."),
+    amount: z.string().optional().describe("Direct amount when not using a catalog quote."),
+    asset: z.string().optional(),
+    requestedWindow: z.string().optional(),
+    location: z.string().optional(),
+    bookingFields: recordSchema.describe("Structured booking fields such as address, route, passengerName, phone, notes."),
+    notes: z.string().optional(),
+}, async ({ vendorId, service, itemId, amount, asset, requestedWindow, location, bookingFields, notes }) => {
+    const registry = await loadVendors();
+    const vendor = getVendor(registry.registry, vendorId);
+    const quote = amount
+        ? undefined
+        : quoteVendorOrder({
+            registryHash: registry.payloadHash,
+            vendor,
+            itemId,
+            quantity: 1,
+            asset,
+            fulfillmentFields: bookingFields,
+        });
+    const finalAmount = amount ?? quote?.amount ?? "0";
+    const finalAsset = String(asset ?? quote?.asset ?? vendor.acceptedAssets?.[0] ?? "LYTH").toUpperCase();
+    decimalToUnits(finalAmount);
+    const finalService = service ?? quote?.itemName ?? itemId ?? vendor.serviceTags?.[0];
+    if (!finalService) {
+        return errorText("service or itemId is required for a booking request");
+    }
+    const policy = await getMerchantPolicy(vendor.id);
+    const merchantRisk = evaluateMerchantPolicy({
+        vendor,
+        quote,
+        policy,
+        amount: finalAmount,
+        asset: finalAsset,
+    });
+    if (!merchantRisk.ok) {
+        return errorJson({
+            ok: false,
+            merchantRisk,
+            quote,
+            refusal: "Booking creation refused by local merchant policy.",
+        });
+    }
+    const draft = await buildVerifiedRunbookDraft({
+        runbook: "book_service",
+        fields: {
+            vendorId,
+            service: finalService,
+            amount: finalAmount,
+            asset: finalAsset,
+            deliveryWindow: requestedWindow,
+            location,
+            notes,
+        },
+        policy: {
+            maxAmount: finalAmount,
+            assetAllowlist: [finalAsset],
+            vendorAllowlist: [vendorId, vendor.address ?? ""].filter(Boolean),
+            categoryAllowlist: vendor.category ? [vendor.category] : undefined,
+            requireHumanApproval: true,
+        },
+    });
+    const booking = await createBooking({
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        vendorId,
+        vendorDisplayName: vendor.displayName,
+        vendorAddress: vendor.address,
+        service: finalService,
+        amount: finalAmount,
+        asset: finalAsset,
+        registryHash: registry.payloadHash,
+        requestedWindow,
+        location,
+        bookingFields,
+        quote: quote ?? { amount: finalAmount, asset: finalAsset, service: finalService },
+        merchantRisk,
+        runbookId: draft.id,
+    });
+    const receipt = await addReceipt({
+        kind: "booking_request_create",
+        status: "drafted",
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        title: `Created booking request ${booking.id}`,
+        summary: `${vendor.displayName ?? vendorId}: ${finalService} (${finalAmount} ${finalAsset})`,
+        to: vendor.address,
+        amount: finalAmount,
+        asset: finalAsset,
+        result: { booking, draft },
+    });
+    return text({
+        registry: vendorRegistrySummary(registry),
+        booking,
+        merchantRisk,
+        draft,
+        receipt,
+        warning: "Local booking request only. No real provider was contacted.",
+    });
+});
+server.tool("booking_accept_demo", "Mark a local booking accepted by a demo provider. No external provider is contacted.", {
+    bookingId: z.string().min(1),
+    providerNote: z.string().optional(),
+    confirm: z.literal("ACCEPT_DEMO_BOOKING"),
+}, async ({ bookingId, providerNote }) => {
+    const current = await getBooking(bookingId);
+    if (current.status === "cancelled" || current.status === "completed_demo") {
+        return errorText(`booking '${bookingId}' cannot be accepted from status ${current.status}`);
+    }
+    const booking = await updateBooking(bookingId, { status: "accepted_demo" }, {
+        type: "accepted_demo",
+        note: providerNote,
+    });
+    return text({
+        booking,
+        warning: "Demo acceptance only. No real provider was contacted.",
+    });
+});
+server.tool("booking_prepare_escrow", "Prepare an open_escrow runbook draft for a local booking.", {
+    bookingId: z.string().min(1),
+    deliverable: z.string().min(1),
+    deadline: z.string().optional(),
+    arbiter: z.string().optional(),
+    acceptanceCriteria: z.string().optional(),
+    refundPolicy: z.string().optional(),
+    notes: z.string().optional(),
+}, async ({ bookingId, deliverable, deadline, arbiter, acceptanceCriteria, refundPolicy, notes }) => {
+    const current = await getBooking(bookingId);
+    if (current.status === "cancelled" || current.status === "completed_demo") {
+        return errorText(`booking '${bookingId}' cannot prepare escrow from status ${current.status}`);
+    }
+    const draft = await buildVerifiedRunbookDraft({
+        runbook: "open_escrow",
+        fields: {
+            counterparty: current.vendorAddress ?? current.vendorId,
+            amount: current.amount,
+            asset: current.asset,
+            deliverable,
+            deadline,
+            arbiter,
+            acceptanceCriteria,
+            refundPolicy,
+            notes,
+        },
+        policy: {
+            maxAmount: current.amount,
+            assetAllowlist: [current.asset],
+            vendorAllowlist: [current.vendorId, current.vendorAddress ?? ""].filter(Boolean),
+            expiresAt: deadline,
+            requireHumanApproval: true,
+        },
+    });
+    const booking = await updateBooking(bookingId, {
+        status: "escrow_prepared",
+        escrow: {
+            runbookId: draft.id,
+            preparedAt: new Date().toISOString(),
+        },
+    }, {
+        type: "escrow_prepared",
+        data: { draft },
+    });
+    const receipt = await addReceipt({
+        kind: "booking_prepare_escrow",
+        status: "drafted",
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        title: `Prepared escrow for booking ${booking.id}`,
+        summary: `${booking.amount} ${booking.asset} escrow for ${deliverable}`,
+        to: booking.vendorAddress,
+        amount: booking.amount,
+        asset: booking.asset,
+        result: { booking, draft },
+    });
+    return text({
+        booking,
+        draft,
+        receipt,
+        warning: "Escrow is a runbook draft only until a live escrow module or contract surface is available.",
+    });
+});
+server.tool("booking_mark_paid", "Mark a booking paid after observing or supplying a payment/escrow transaction hash.", {
+    bookingId: z.string().min(1),
+    txHash: z.string().min(1),
+}, async ({ bookingId, txHash }) => {
+    const current = await getBooking(bookingId);
+    if (current.status === "cancelled") {
+        return errorText("cancelled bookings cannot be marked paid");
+    }
+    const booking = await updateBooking(bookingId, {
+        status: "paid",
+        paymentTxHash: txHash,
+        escrow: current.escrow ? { ...current.escrow, txHash } : undefined,
+    }, {
+        type: "paid",
+        data: { txHash },
+    });
+    return text({ booking });
+});
+server.tool("booking_complete_dry_run", "Mark a local booking completed by a dry-run fulfillment adapter.", {
+    bookingId: z.string().min(1),
+    deliverable: z.string().optional(),
+    confirm: z.literal("COMPLETE_DRY_RUN"),
+}, async ({ bookingId, deliverable }) => {
+    const current = await getBooking(bookingId);
+    if (current.status === "cancelled") {
+        return errorText("cancelled bookings cannot be completed");
+    }
+    if (current.status === "disputed_demo") {
+        return errorText("disputed demo bookings must be resolved outside the dry-run completion tool");
+    }
+    const confirmation = `booking_dryrun_${Date.now()}_${randomUUID().slice(0, 8)}`;
+    const booking = await updateBooking(bookingId, {
+        status: "completed_demo",
+        completion: {
+            confirmation,
+            completedAt: new Date().toISOString(),
+            deliverable,
+        },
+    }, {
+        type: "completed_demo",
+        data: { confirmation, deliverable },
+        note: "Dry-run completion only.",
+    });
+    const receipt = await addReceipt({
+        kind: "booking_complete_dry_run",
+        status: "confirmed",
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        title: `Dry-run completed booking ${booking.id}`,
+        summary: `${booking.vendorDisplayName ?? booking.vendorId}: ${confirmation}`,
+        to: booking.vendorAddress,
+        amount: booking.amount,
+        asset: booking.asset,
+        result: booking,
+    });
+    return text({
+        booking,
+        receipt,
+        warning: "Dry-run completion only. No real service was delivered.",
+    });
+});
+server.tool("booking_dispute_demo", "Open a local demo dispute for a booking.", {
+    bookingId: z.string().min(1),
+    reason: z.string().min(1),
+    confirm: z.literal("OPEN_DEMO_DISPUTE"),
+}, async ({ bookingId, reason }) => {
+    const current = await getBooking(bookingId);
+    if (current.status === "cancelled" || current.status === "completed_demo") {
+        return errorText(`booking '${bookingId}' cannot be disputed from status ${current.status}`);
+    }
+    const booking = await updateBooking(bookingId, {
+        status: "disputed_demo",
+        dispute: {
+            reason,
+            openedAt: new Date().toISOString(),
+        },
+    }, {
+        type: "disputed_demo",
+        note: reason,
+    });
+    return text({
+        booking,
+        warning: "Local demo dispute only. Real disputes require a live escrow/arbiter surface.",
+    });
+});
+server.tool("booking_status", "Get one local booking by id.", {
+    bookingId: z.string().min(1),
+}, async ({ bookingId }) => text(await getBooking(bookingId)));
+server.tool("booking_list", "List local service bookings.", {
+    status: bookingStatusEnum.optional(),
+    vendorId: z.string().optional(),
+    limit: z.number().min(1).max(100).optional(),
+}, async ({ status, vendorId, limit }) => text({
+    store: await bookingStoreInfo(),
+    bookings: await listBookings({ status: status, vendorId, limit }),
+}));
+server.tool("booking_cancel", "Cancel a local booking if it has not completed.", {
+    bookingId: z.string().min(1),
+    reason: z.string().optional(),
+    confirm: z.literal("CANCEL_BOOKING"),
+}, async ({ bookingId, reason }) => {
+    const current = await getBooking(bookingId);
+    if (current.status === "completed_demo") {
+        return errorText("completed demo bookings cannot be cancelled");
+    }
+    const booking = await updateBooking(bookingId, {
+        status: "cancelled",
+        cancelReason: reason,
+    }, {
+        type: "cancelled",
+        note: reason,
+    });
+    return text({ booking });
 });
 server.tool("invoice_create", "Create a local invoice requesting payment to an address.", {
     recipient: z.string().describe("0x recipient address."),
