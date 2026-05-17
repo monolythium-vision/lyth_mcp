@@ -50,6 +50,7 @@ Legend:
 - [x] Local canonical runbook registry tools with stable content hashes.
 - [x] Draft/validate/prepare flows attach canonical runbook metadata and required-field checks.
 - [x] Vendor registry hashes/signature status, demo order lifecycle, and dry-run fulfillment adapter.
+- [x] Local invoices and funding requests with canonical request-funds drafts.
 - [x] Local addressbook with named-recipient transfer resolution.
 - [x] Demo vendor registry with pizza, flight, plumber, gift-card, and legal-review examples.
 - [x] Draft runbooks for payment, service booking, escrow, trade, policy, receipt, and vendor-rating flows.
@@ -438,7 +439,7 @@ Whitepaper refs: §10, §18, §24, §27.7.
 - [x] **MCP** Order lifecycle.
   - `order_quote`, `order_create`, `order_pay`, `order_status`, `order_receipt`, `order_cancel`.
   - For now, demo only; production requires real vendor terms and fulfillment hooks.
-- [ ] **MCP** Invoices and funding requests.
+- [x] **MCP** Invoices and funding requests.
   - `invoice_create`, `invoice_status`, `funding_request_create`.
   - Let agent say: "Send 50 USDC/LYTH here for this task; expires at X."
 - [ ] **MCP** Service booking.

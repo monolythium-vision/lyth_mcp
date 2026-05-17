@@ -50,6 +50,14 @@ import {
   type OrderStatus,
 } from "./orders.js";
 import {
+  createInvoice,
+  getInvoice,
+  invoiceStoreInfo,
+  listInvoices,
+  updateInvoice,
+  type InvoiceStatus,
+} from "./invoices.js";
+import {
   diffRunbookContent,
   getCanonicalRunbook,
   listCanonicalRunbooks,
@@ -1301,6 +1309,7 @@ const runbookEnum = z.enum([
 const outboxStatusEnum = z.enum(["signed", "submitted", "confirmed", "failed", "expired"]);
 const receiptStatusEnum = z.enum(["drafted", "signed", "submitted", "confirmed", "failed"]);
 const orderStatusEnum = z.enum(["created", "payment_prepared", "paid", "fulfilled_demo", "cancelled"]);
+const invoiceStatusEnum = z.enum(["open", "paid", "cancelled", "expired"]);
 
 const recordSchema = z.record(z.unknown()).optional();
 const policySchema = z.object({
@@ -1371,6 +1380,7 @@ server.tool("mcp_self_check", "Check MCP install, config, stores, and RPC reacha
       outbox: await outboxInfo(),
       receipts: await receiptInfo(),
       orders: await orderStoreInfo(),
+      invoices: await invoiceStoreInfo(),
       vendorRegistry: VENDOR_REGISTRY_PATH,
       runbookRegistry: RUNBOOK_REGISTRY_PATH,
     },
@@ -2930,12 +2940,14 @@ server.tool(
     const outbox = await listOutboxEntries({ limit: 10 });
     const receipts = await listReceipts({ limit: 10 });
     const orders = await listOrders({ limit: 10 });
+    const invoices = await listInvoices({ limit: 10 });
     const contacts = await listAddressbookContacts();
     const walletInfo = await walletStoreInfo();
     const contactInfo = await addressbookInfo();
     const outboxStore = await outboxInfo();
     const receiptStore = await receiptInfo();
     const orderStore = await orderStoreInfo();
+    const invoiceStore = await invoiceStoreInfo();
     const lines = [
       "# Lyth MCP Dashboard",
       "",
@@ -2950,6 +2962,7 @@ server.tool(
           ["Outbox", String(outboxStore.entryCount), outboxStore.path],
           ["Receipts", String(receiptStore.receiptCount), receiptStore.path],
           ["Orders", String(orderStore.orderCount), orderStore.path],
+          ["Invoices", String(invoiceStore.invoiceCount), invoiceStore.path],
         ],
       ),
       "",
@@ -3019,6 +3032,20 @@ server.tool(
               ]),
             )
           : "No orders.",
+        "",
+        "## Invoices",
+        invoices.length
+          ? mdTable(
+              ["ID", "Type", "Status", "Amount", "Recipient"],
+              invoices.map((invoice) => [
+                invoice.id,
+                invoice.type,
+                invoice.status,
+                `${invoice.amount} ${invoice.asset}`,
+                short(invoice.recipient),
+              ]),
+            )
+          : "No invoices.",
       );
     }
     return { content: [{ type: "text" as const, text: lines.join("\n") }] };
@@ -3330,6 +3357,178 @@ server.tool(
       receipt,
       warning: "Dry-run fulfillment only. No real goods, food, tickets, services, or gift cards were delivered.",
     });
+  },
+);
+
+server.tool(
+  "invoice_create",
+  "Create a local invoice requesting payment to an address.",
+  {
+    recipient: z.string().describe("0x recipient address."),
+    amount: z.string(),
+    asset: z.string().optional(),
+    purpose: z.string().min(1),
+    payer: z.string().optional(),
+    expiresAt: z.string().optional(),
+    memo: z.string().optional(),
+  },
+  async ({ recipient, amount, asset, purpose, payer, expiresAt, memo }) => {
+    if (!isWireAddress(recipient)) {
+      return errorText("recipient must be a 0x wire address");
+    }
+    const invoice = await createInvoice({
+      type: "invoice",
+      network: NETWORK,
+      chainId: CHAIN_ID,
+      recipient,
+      amount,
+      asset: asset ?? "LYTH",
+      purpose,
+      payer,
+      expiresAt,
+      memo,
+    });
+    const draft = await buildVerifiedRunbookDraft({
+      runbook: "request_funds",
+      fields: {
+        agentAddress: recipient,
+        amount,
+        asset: asset ?? "LYTH",
+        purpose,
+        expiresAt,
+      },
+      policy: {
+        maxAmount: amount,
+        assetAllowlist: [asset ?? "LYTH"],
+        expiresAt,
+        requireHumanApproval: true,
+      },
+    });
+    const receipt = await addReceipt({
+      kind: "invoice_create",
+      status: "drafted",
+      network: NETWORK,
+      chainId: CHAIN_ID,
+      title: `Created invoice ${invoice.id}`,
+      summary: `${amount} ${asset ?? "LYTH"} -> ${recipient}`,
+      to: recipient,
+      amount,
+      asset: asset ?? "LYTH",
+      result: { invoice, draft },
+    });
+    return text({
+      invoice,
+      draft,
+      receipt,
+      paymentUri: `monolythium://send?to=${encodeURIComponent(recipient)}&amount=${encodeURIComponent(amount)}&asset=${encodeURIComponent(asset ?? "LYTH")}&chainId=${CHAIN_ID}`,
+    });
+  },
+);
+
+server.tool(
+  "funding_request_create",
+  "Create a local agent funding request. The agent can show the returned address/URI to the user.",
+  {
+    walletName: z.string().optional().describe("Existing local wallet name. If omitted, recipient is required."),
+    recipient: z.string().optional().describe("0x recipient address. Optional when walletName is supplied."),
+    amount: z.string(),
+    asset: z.string().optional(),
+    purpose: z.string().min(1),
+    expiresAt: z.string().optional(),
+    memo: z.string().optional(),
+  },
+  async ({ walletName, recipient, amount, asset, purpose, expiresAt, memo }) => {
+    const wallet = walletName ? (await listWallets()).find((item) => item.name === walletName) : null;
+    const address = wallet?.address ?? recipient;
+    if (!address || !isWireAddress(address)) {
+      return errorText("recipient must be a 0x wire address, or walletName must resolve to a local wallet");
+    }
+    const request = await createInvoice({
+      type: "funding_request",
+      network: NETWORK,
+      chainId: CHAIN_ID,
+      recipient: address,
+      amount,
+      asset: asset ?? "LYTH",
+      purpose,
+      expiresAt,
+      memo,
+    });
+    const draft = await buildVerifiedRunbookDraft({
+      runbook: "request_funds",
+      fields: {
+        agentAddress: address,
+        amount,
+        asset: asset ?? "LYTH",
+        purpose,
+        expiresAt,
+      },
+      agent: wallet ? { name: wallet.name, address: wallet.address, purpose: (wallet.agent as { purpose?: string } | undefined)?.purpose } : undefined,
+      policy: {
+        maxAmount: amount,
+        assetAllowlist: [asset ?? "LYTH"],
+        expiresAt,
+        requireHumanApproval: true,
+      },
+    });
+    return text({
+      fundingRequest: request,
+      draft,
+      message: `Send ${amount} ${asset ?? "LYTH"} to ${address} for: ${purpose}`,
+      paymentUri: `monolythium://send?to=${encodeURIComponent(address)}&amount=${encodeURIComponent(amount)}&asset=${encodeURIComponent(asset ?? "LYTH")}&chainId=${CHAIN_ID}`,
+    });
+  },
+);
+
+server.tool(
+  "invoice_status",
+  "Get a local invoice or funding request.",
+  {
+    id: z.string().min(1),
+  },
+  async ({ id }) => text(await getInvoice(id)),
+);
+
+server.tool(
+  "invoice_list",
+  "List local invoices and funding requests.",
+  {
+    status: invoiceStatusEnum.optional(),
+    type: z.enum(["invoice", "funding_request"]).optional(),
+    limit: z.number().min(1).max(100).optional(),
+  },
+  async ({ status, type, limit }) => text({
+    store: await invoiceStoreInfo(),
+    invoices: await listInvoices({ status: status as InvoiceStatus | undefined, type, limit }),
+  }),
+);
+
+server.tool(
+  "invoice_mark_paid",
+  "Mark a local invoice/funding request paid with a tx hash.",
+  {
+    id: z.string().min(1),
+    txHash: z.string().min(1),
+  },
+  async ({ id, txHash }) => {
+    const invoice = await updateInvoice(id, { status: "paid", txHash }, "paid", { txHash });
+    return text({ invoice });
+  },
+);
+
+server.tool(
+  "invoice_cancel",
+  "Cancel a local open invoice/funding request.",
+  {
+    id: z.string().min(1),
+    confirm: z.literal("CANCEL_INVOICE"),
+  },
+  async ({ id }) => {
+    const invoice = await getInvoice(id);
+    if (invoice.status === "paid") {
+      return errorText("paid invoices cannot be cancelled");
+    }
+    return text({ invoice: await updateInvoice(id, { status: "cancelled" }, "cancelled") });
   },
 );
 

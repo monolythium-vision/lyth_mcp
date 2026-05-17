@@ -154,6 +154,7 @@ examples/claude_desktop_config.json
 | `LYTH_MCP_OUTBOX` | `~/.lyth_mcp/outbox.json` | Local signed-payload outbox for retrying without rebuilding/re-signing |
 | `LYTH_MCP_RECEIPTS` | `~/.lyth_mcp/receipts.json` | Local receipt store for drafted/signed/submitted/failed operations |
 | `LYTH_MCP_ORDER_STORE` | `~/.lyth_mcp/orders.json` | Local demo order lifecycle store |
+| `LYTH_MCP_INVOICE_STORE` | `~/.lyth_mcp/invoices.json` | Local invoice and funding-request store |
 | `LYTH_MCP_RUNBOOK_REGISTRY` | bundled `runbooks/` | Local canonical runbook registry path |
 | `LYTH_MCP_WALLET_PASSPHRASE` | unset | Optional env passphrase for unattended passphrase signing; safer to pass per call |
 | `LYTH_MCP_DEFAULT_LOW_VALUE_MAX` | `10` | Default LYTH per-transaction cap for passphrase-less wallets |
@@ -209,6 +210,12 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `order_receipt` | Export a local order receipt |
 | `order_cancel` | Cancel a local order before dry-run fulfillment |
 | `order_fulfill_dry_run` | Mark a local demo order fulfilled without contacting a real vendor |
+| `invoice_create` | Create a local invoice requesting payment |
+| `funding_request_create` | Create a local agent funding request |
+| `invoice_status` | Get a local invoice/funding request |
+| `invoice_list` | List invoices and funding requests |
+| `invoice_mark_paid` | Mark an invoice/funding request paid with a tx hash |
+| `invoice_cancel` | Cancel an open invoice/funding request |
 | `submit_signed_transaction` | Broadcast an already-signed payload, disabled unless explicitly enabled; can update an outbox id |
 | `tx_outbox_list` | List local signed payloads that can be retried |
 | `tx_outbox_get` | Inspect one local signed payload |
@@ -578,6 +585,10 @@ Typical flow:
 4. `order_mark_paid` with an observed tx hash, or continue as payment-prepared in a dry run
 5. `order_fulfill_dry_run`
 6. `order_receipt`
+
+## Invoices And Funding Requests
+
+`invoice_create` and `funding_request_create` create local payment requests with a `monolythium://send` URI and a canonical `request_funds` runbook draft. They do not watch for payment automatically yet; use `invoice_mark_paid` with an observed tx hash.
 
 ## Broadcasting Signed Payloads
 
