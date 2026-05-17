@@ -14,13 +14,15 @@
     "LICENSE",
     "examples",
     "runbooks",
+    "scripts/verify-dist.cjs",
     "vendors.example.json"
   ],
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepare": "node scripts/verify-dist.cjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
