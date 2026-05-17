@@ -371,8 +371,9 @@ Whitepaper refs: §14, §20, §23, §28, §30.5.
 - [ ] **CORE SDK** Delegation tools.
   - `stake_status`, `delegate_draft`, `rebalance_draft`, `undelegate_draft`, `autovote_simulate`.
   - Modes: Max Yield, Max Diversity, Max Decentralization, Custom.
-- [ ] **MCP** Delegation cap explanation.
+- [x] **MCP** Delegation cap explanation.
   - Explain current phase, per-cluster cap, minimum diversification, over-cap grace period, tapered rewards.
+  - Implemented as `delegation_cap_explain`; live governance/staking parameters remain TODO(core/indexer).
 - [ ] **CORE SDK INDEXER** Service-tier market tools.
   - `rpc_service_search`, `archive_service_search`, `prover_service_search`, `oracle_service_search`.
   - Show price, uptime, capacity, GPU class, proof latency, reputation.

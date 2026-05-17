@@ -27,6 +27,7 @@ import { bookingStoreInfo, createBooking, getBooking, listBookings, updateBookin
 import { createInvoice, getInvoice, invoiceStoreInfo, listInvoices, updateInvoice, } from "./invoices.js";
 import { explainError } from "./error_explain.js";
 import { clusterFoundationFlag, clusterRegistrySummary, clusterReputation, clusterSunsetStatus, getCluster, getOperator, listClusters, listOperators, loadClusterRegistry, monarchOperatorAssistant, operatorStatus, searchServices, } from "./clusters.js";
+import { delegationPhaseConfig, explainDelegationCaps, } from "./delegation.js";
 import { evaluateMerchantPolicy, getMerchantPolicy, listMerchantPolicies, merchantPolicyStoreInfo, removeMerchantPolicy, upsertMerchantPolicy, } from "./merchant_policy.js";
 import { diffRunbookContent, getCanonicalRunbook, listCanonicalRunbooks, } from "./runbooks.js";
 import { renderRisk } from "./risk_renderer.js";
@@ -1185,6 +1186,7 @@ const bridgeStatusEnum = z.enum(["active", "draft", "degraded", "paused"]);
 const bridgeRouteTypeEnum = z.enum(["ibc", "zk_light_client", "trusted", "issuer_native", "manual"]);
 const clusterStatusEnum = z.enum(["active", "draft", "degraded", "sunsetting", "retired"]);
 const clusterServiceTypeEnum = z.enum(["rpc", "archive", "prover", "oracle", "indexer", "validator"]);
+const delegationPhaseEnum = z.enum(["bootstrap", "growth", "mature"]);
 const assetKindEnum = z.enum(["native", "private_native", "wrapped", "issuer_native", "mrc20", "nft", "vault"]);
 const assetStatusEnum = z.enum(["active", "draft", "deprecated", "blocked"]);
 const assetDenominationEnum = z.enum(["public", "private", "external"]);
@@ -2308,7 +2310,7 @@ server.tool("ask_chain", "Route a natural-language blockchain question to a type
             result: explainError({ errorMessage: question, tool: "ask_chain" }),
         });
     }
-    if (/(status|health|sync|mempool|rpc health|rpc status)/i.test(question) && !/(cluster|operator|validator|prover|gpu|proof|zkml|foundation|decentralization|decentralisation|stake|staking|monarch|quorum|service roi|resource pressure)/i.test(question)) {
+    if (/(status|health|sync|mempool|rpc health|rpc status)/i.test(question) && !/(cluster|operator|validator|prover|gpu|proof|zkml|foundation|decentralization|decentralisation|stake|staking|delegation cap|stake cap|over[-\s]?cap|taper|monarch|quorum|service roi|resource pressure)/i.test(question)) {
         const endpoint = await firstReachableEndpoint();
         const [stats, round, mempool, indexer, sync] = await Promise.allSettled([
             rpcCall(endpoint, "lyth_chainStats"),
@@ -2333,8 +2335,20 @@ server.tool("ask_chain", "Route a natural-language blockchain question to a type
             },
         });
     }
-    if (/(cluster|operator|validator|prover|gpu|proof|zkml|foundation|decentralization|decentralisation|stake|staking|monarch|quorum|service roi|resource pressure|archive service|oracle service)/i.test(question)) {
+    if (/(cluster|operator|validator|prover|gpu|proof|zkml|foundation|decentralization|decentralisation|stake|staking|delegation cap|stake cap|over[-\s]?cap|taper|monarch|quorum|service roi|resource pressure|archive service|oracle service)/i.test(question)) {
         const registry = await loadClusters();
+        if (/delegation cap|stake cap|over[-\s]?cap|taper/i.test(question)) {
+            return asText({
+                question,
+                intent: "delegation_cap_explain",
+                typedTool: "delegation_cap_explain",
+                sources: [{ type: "local_policy", module: "delegation", warning: "TODO(mainnet): replace with signed staking parameters." }],
+                result: explainDelegationCaps({
+                    phase: /bootstrap/i.test(question) ? "bootstrap" : /mature/i.test(question) ? "mature" : "growth",
+                    totalDelegatedStake: extractDecimal(question),
+                }),
+            });
+        }
         const region = /\beu\b|europe/i.test(question)
             ? "EU"
             : /\bna\b|us|america/i.test(question)
@@ -3551,6 +3565,21 @@ server.tool("monarch_operator_assistant", "Explain cluster health, 7-of-10 quoru
         warning: "Node-ops guidance only. This tool must not be used as a consumer wallet/payment flow.",
     });
 });
+server.tool("delegation_cap_explain", "Explain current delegation phase, per-cluster cap, minimum diversification, over-cap grace, and tapered rewards.", {
+    phase: delegationPhaseEnum.optional(),
+    clusterId: z.string().optional(),
+    totalDelegatedStake: z.string().optional(),
+    currentClusterStake: z.string().optional(),
+    intendedAdditionalStake: z.string().optional(),
+    selectedClusterCount: z.number().int().min(0).optional(),
+    overCapEpochs: z.number().int().min(0).optional(),
+}, async (args) => text({
+    phaseConfig: delegationPhaseConfig(args.phase ?? "growth"),
+    explanation: explainDelegationCaps({
+        ...args,
+        phase: args.phase,
+    }),
+}));
 async function serviceSearchResponse(serviceType, args) {
     const registry = await loadClusters();
     return {
