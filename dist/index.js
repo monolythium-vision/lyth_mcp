@@ -28,6 +28,7 @@ import { createInvoice, getInvoice, invoiceStoreInfo, listInvoices, updateInvoic
 import { explainError } from "./error_explain.js";
 import { clusterFoundationFlag, clusterRegistrySummary, clusterReputation, clusterSunsetStatus, getCluster, getOperator, listClusters, listOperators, loadClusterRegistry, monarchOperatorAssistant, operatorStatus, searchServices, } from "./clusters.js";
 import { delegationPhaseConfig, explainDelegationCaps, } from "./delegation.js";
+import { explainPcr, getNode, listNodes, loadNodeRegistry, nodeAttestation, nodeDiversityScore, nodeHostingClass, nodeRegistrySummary, } from "./nodes.js";
 import { evaluateMerchantPolicy, getMerchantPolicy, listMerchantPolicies, merchantPolicyStoreInfo, removeMerchantPolicy, upsertMerchantPolicy, } from "./merchant_policy.js";
 import { diffRunbookContent, getCanonicalRunbook, listCanonicalRunbooks, } from "./runbooks.js";
 import { renderRisk } from "./risk_renderer.js";
@@ -65,6 +66,8 @@ const DEFAULT_BRIDGE_ROUTE_REGISTRY_PATH = resolve(PACKAGE_ROOT, "bridge_routes.
 const BRIDGE_ROUTE_REGISTRY_PATH = process.env.LYTH_MCP_BRIDGE_ROUTE_REGISTRY || DEFAULT_BRIDGE_ROUTE_REGISTRY_PATH;
 const DEFAULT_CLUSTER_REGISTRY_PATH = resolve(PACKAGE_ROOT, "clusters.example.json");
 const CLUSTER_REGISTRY_PATH = process.env.LYTH_MCP_CLUSTER_REGISTRY || DEFAULT_CLUSTER_REGISTRY_PATH;
+const DEFAULT_NODE_REGISTRY_PATH = resolve(PACKAGE_ROOT, "nodes.example.json");
+const NODE_REGISTRY_PATH = process.env.LYTH_MCP_NODE_REGISTRY || DEFAULT_NODE_REGISTRY_PATH;
 const RUNBOOK_REGISTRY_PATH = process.env.LYTH_MCP_RUNBOOK_REGISTRY || resolve(PACKAGE_ROOT, "runbooks");
 function truncate(value, max = MAX_OUTPUT) {
     const text = typeof value === "string" ? value : safeStringify(value);
@@ -823,6 +826,10 @@ async function loadClusters() {
     // TODO(mainnet): replace bundled planning data with signed/indexer cluster registry reads once core exposes them.
     return loadClusterRegistry(CLUSTER_REGISTRY_PATH);
 }
+async function loadNodes() {
+    // TODO(mainnet): replace bundled planning data with signed node registry and TPM quote verification.
+    return loadNodeRegistry(NODE_REGISTRY_PATH);
+}
 async function quoteOrder(args) {
     const registry = await loadVendors();
     const vendor = getVendor(registry.registry, args.vendorId);
@@ -1187,6 +1194,10 @@ const bridgeRouteTypeEnum = z.enum(["ibc", "zk_light_client", "trusted", "issuer
 const clusterStatusEnum = z.enum(["active", "draft", "degraded", "sunsetting", "retired"]);
 const clusterServiceTypeEnum = z.enum(["rpc", "archive", "prover", "oracle", "indexer", "validator"]);
 const delegationPhaseEnum = z.enum(["bootstrap", "growth", "mature"]);
+const nodeRoleEnum = z.enum(["validator", "rpc", "archive", "prover", "oracle", "indexer"]);
+const nodeStatusEnum = z.enum(["active", "draft", "degraded", "paused", "retired"]);
+const nodeHostingClassEnum = z.enum(["community_baremetal", "cloud_dedicated", "cloud_shared", "cloud_gpu", "planned_mixed"]);
+const attestationStatusEnum = z.enum(["verified", "draft", "missing", "expired", "mismatch"]);
 const assetKindEnum = z.enum(["native", "private_native", "wrapped", "issuer_native", "mrc20", "nft", "vault"]);
 const assetStatusEnum = z.enum(["active", "draft", "deprecated", "blocked"]);
 const assetDenominationEnum = z.enum(["public", "private", "external"]);
@@ -2310,7 +2321,7 @@ server.tool("ask_chain", "Route a natural-language blockchain question to a type
             result: explainError({ errorMessage: question, tool: "ask_chain" }),
         });
     }
-    if (/(status|health|sync|mempool|rpc health|rpc status)/i.test(question) && !/(cluster|operator|validator|prover|gpu|proof|zkml|foundation|decentralization|decentralisation|stake|staking|delegation cap|stake cap|over[-\s]?cap|taper|monarch|quorum|service roi|resource pressure)/i.test(question)) {
+    if (/(status|health|sync|mempool|rpc health|rpc status)/i.test(question) && !/(node|tpm|pcr|attestation|hosting|cluster|operator|validator|prover|gpu|proof|zkml|foundation|decentralization|decentralisation|stake|staking|delegation cap|stake cap|over[-\s]?cap|taper|monarch|quorum|service roi|resource pressure)/i.test(question)) {
         const endpoint = await firstReachableEndpoint();
         const [stats, round, mempool, indexer, sync] = await Promise.allSettled([
             rpcCall(endpoint, "lyth_chainStats"),
@@ -2332,6 +2343,58 @@ server.tool("ask_chain", "Route a natural-language blockchain question to a type
                 mempool: mempool.status === "fulfilled" ? mempool.value : { error: mempool.reason?.message ?? String(mempool.reason) },
                 indexer: indexer.status === "fulfilled" ? indexer.value : { error: indexer.reason?.message ?? String(indexer.reason) },
                 syncing: sync.status === "fulfilled" ? sync.value : { error: sync.reason?.message ?? String(sync.reason) },
+            },
+        });
+    }
+    if (/(node|tpm|pcr|attestation|hosting class|hosting risk)/i.test(question)) {
+        const registry = await loadNodes();
+        const node = registry.registry.nodes.find((item) => lower.includes(item.id.toLowerCase()));
+        const role = /prover/i.test(question)
+            ? "prover"
+            : /validator/i.test(question)
+                ? "validator"
+                : /\brpc\b/i.test(question)
+                    ? "rpc"
+                    : /archive/i.test(question)
+                        ? "archive"
+                        : /oracle/i.test(question)
+                            ? "oracle"
+                            : undefined;
+        const pcr = question.match(/\bpcr\s*(\d+)\b/i)?.[1];
+        if (node) {
+            return asText({
+                question,
+                intent: pcr ? "node_pcr_explain" : /hosting/i.test(question) ? "node_hosting_class" : "node_attestation_get",
+                typedTool: pcr ? "node_pcr_explain" : /hosting/i.test(question) ? "node_hosting_class" : "node_attestation_get",
+                sources: [{ type: "local_registry", path: NODE_REGISTRY_PATH, hash: registry.contentHash }],
+                result: {
+                    node,
+                    attestation: nodeAttestation(node),
+                    pcr: pcr ? explainPcr(node, pcr) : undefined,
+                    hosting: /hosting/i.test(question) ? nodeHostingClass(node) : undefined,
+                },
+            });
+        }
+        return asText({
+            question,
+            intent: /diversity/i.test(question) ? "node_diversity_score" : "node_search",
+            typedTool: /diversity/i.test(question) ? "node_diversity_score" : "node_search",
+            sources: [{ type: "local_registry", path: NODE_REGISTRY_PATH, hash: registry.contentHash }],
+            result: {
+                registry: nodeRegistrySummary(registry),
+                diversity: /diversity/i.test(question) ? nodeDiversityScore(registry.registry, { role }) : undefined,
+                nodes: listNodes(registry.registry, {
+                    query: /tpm/i.test(question) ? undefined : question,
+                    role,
+                    attestationStatus: /verified/i.test(question) ? "verified" : undefined,
+                    tpmRequired: /tpm/i.test(question) ? true : undefined,
+                    gpuRequired: /gpu/i.test(question) ? true : undefined,
+                    limit: limit ?? 10,
+                }).map((item) => ({
+                    node: item,
+                    attestation: nodeAttestation(item),
+                    hosting: nodeHostingClass(item),
+                })),
             },
         });
     }
@@ -3580,6 +3643,93 @@ server.tool("delegation_cap_explain", "Explain current delegation phase, per-clu
         phase: args.phase,
     }),
 }));
+server.tool("node_registry_info", "Show local node registry metadata, hashes, roles, statuses, hosting classes, and attestation states.", {}, async () => {
+    const registry = await loadNodes();
+    return text(nodeRegistrySummary(registry));
+});
+server.tool("node_search", "Search local node metadata by cluster, operator, role, status, region, hosting class, attestation status, GPU, and TPM.", {
+    query: z.string().optional(),
+    clusterId: z.string().optional(),
+    operatorId: z.string().optional(),
+    role: nodeRoleEnum.optional(),
+    status: nodeStatusEnum.optional(),
+    region: z.string().optional(),
+    hostingClass: nodeHostingClassEnum.optional(),
+    attestationStatus: attestationStatusEnum.optional(),
+    gpuRequired: z.boolean().optional(),
+    tpmRequired: z.boolean().optional(),
+    limit: z.number().min(1).max(100).optional(),
+}, async ({ query, clusterId, operatorId, role, status, region, hostingClass, attestationStatus, gpuRequired, tpmRequired, limit }) => {
+    const registry = await loadNodes();
+    const nodes = listNodes(registry.registry, {
+        query,
+        clusterId,
+        operatorId,
+        role: role,
+        status: status,
+        region,
+        hostingClass: hostingClass,
+        attestationStatus: attestationStatus,
+        gpuRequired,
+        tpmRequired,
+        limit,
+    });
+    return text({
+        registry: nodeRegistrySummary(registry),
+        nodes: nodes.map((node) => ({
+            node,
+            attestation: nodeAttestation(node),
+            hosting: nodeHostingClass(node),
+        })),
+        warning: "Local planning metadata only. TODO(mainnet): replace with signed node registry and live TPM quote verification.",
+    });
+});
+server.tool("node_attestation_get", "Get local TPM/attestation metadata for one node and compare PCRs against the expected profile.", {
+    nodeId: z.string().min(1),
+}, async ({ nodeId }) => {
+    const registry = await loadNodes();
+    const node = getNode(registry.registry, nodeId);
+    return nodeAttestation(node).ok
+        ? text({ registry: nodeRegistrySummary(registry), node, attestation: nodeAttestation(node) })
+        : errorJson({ registry: nodeRegistrySummary(registry), node, attestation: nodeAttestation(node) });
+});
+server.tool("node_pcr_explain", "Explain TPM PCR values for a node, including expected/actual PCR profile and local measured-boot meaning.", {
+    nodeId: z.string().min(1),
+    pcr: z.string().optional().describe("Optional PCR index, e.g. 0, 2, 4, 7, 11."),
+}, async ({ nodeId, pcr }) => {
+    const registry = await loadNodes();
+    const node = getNode(registry.registry, nodeId);
+    return text({
+        registry: nodeRegistrySummary(registry),
+        node,
+        pcr: explainPcr(node, pcr),
+        attestation: nodeAttestation(node),
+    });
+});
+server.tool("node_diversity_score", "Score local node diversity by ASN, provider, country, hosting class, operator, and cluster.", {
+    clusterId: z.string().optional(),
+    operatorId: z.string().optional(),
+    region: z.string().optional(),
+    role: nodeRoleEnum.optional(),
+}, async ({ clusterId, operatorId, region, role }) => {
+    const registry = await loadNodes();
+    return text({
+        registry: nodeRegistrySummary(registry),
+        diversity: nodeDiversityScore(registry.registry, { clusterId, operatorId, region, role: role }),
+    });
+});
+server.tool("node_hosting_class", "Explain one node's hosting class and correlated-failure risk.", {
+    nodeId: z.string().min(1),
+}, async ({ nodeId }) => {
+    const registry = await loadNodes();
+    const node = getNode(registry.registry, nodeId);
+    return text({
+        registry: nodeRegistrySummary(registry),
+        node,
+        hosting: nodeHostingClass(node),
+        attestation: nodeAttestation(node),
+    });
+});
 async function serviceSearchResponse(serviceType, args) {
     const registry = await loadClusters();
     return {

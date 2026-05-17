@@ -23,6 +23,7 @@ const riskRenderer = await import("../dist/risk_renderer.js");
 const errorExplain = await import("../dist/error_explain.js");
 const clusters = await import("../dist/clusters.js");
 const delegation = await import("../dist/delegation.js");
+const nodes = await import("../dist/nodes.js");
 
 function assert(condition, message) {
   if (!condition) {
@@ -175,6 +176,14 @@ const delegationCap = delegation.explainDelegationCaps({
   selectedClusterCount: 5,
   overCapEpochs: 3,
 });
+const nodeRegistry = await nodes.loadNodeRegistry("./nodes.example.json");
+const proverNode = nodes.getNode(nodeRegistry.registry, "nl1-prover-01");
+const rpcNode = nodes.getNode(nodeRegistry.registry, "nl1-rpc-01");
+const attestation = nodes.nodeAttestation(proverNode);
+const rpcAttestation = nodes.nodeAttestation(rpcNode);
+const pcr = nodes.explainPcr(rpcNode, "7");
+const diversity = nodes.nodeDiversityScore(nodeRegistry.registry, { clusterId: "mono-nl-community-1" });
+const hosting = nodes.nodeHostingClass(proverNode);
 assert(euProvers.some((entry) => entry.clusterId === "mono-nl-community-1"), "expected EU prover service search to include NL community cluster");
 assert(foundationClusters.some((cluster) => cluster.id === "mono-eu-1"), "expected foundation cluster flag search");
 assert(decentralizationClusters[0].id === "mono-nl-community-1", "expected NL community cluster to lead decentralization candidates");
@@ -183,6 +192,11 @@ assert(monarch.clusters.some((entry) => entry.quorum.configured === "7-of-10"), 
 assert(monarch.guardrails.some((entry) => entry.includes("node/operator")), "expected monarch assistant node-ops guardrail");
 assert(delegationCap.taper.overCap === true && delegationCap.taper.rewardTaperPercent > 0, "expected delegation cap taper for over-cap cluster");
 assert(delegationCap.diversification.ok === false, "expected delegation diversification warning");
+assert(attestation.ok === true && attestation.status === "verified", "expected prover node attestation to verify against local profile");
+assert(rpcAttestation.ok === false && rpcAttestation.mismatches.some((item) => item.pcr === "7"), "expected RPC node PCR mismatch");
+assert(pcr.entries[0].meaning.includes("Secure Boot"), "expected PCR 7 explanation");
+assert(diversity.score > 50, "expected NL cluster node diversity score");
+assert(hosting.risk === "low", "expected community baremetal hosting to be low risk");
 
 const runbookList = await runbooks.listCanonicalRunbooks("./runbooks");
 assert(runbookList.length >= 9, "expected bundled canonical runbooks");
@@ -203,5 +217,7 @@ console.log(JSON.stringify({
   euProvers: euProvers.length,
   monarchClusters: monarch.clusters.length,
   delegationTaper: delegationCap.taper.rewardTaperPercent,
+  nodes: nodeRegistry.registry.nodes.length,
+  nodeDiversity: diversity.score,
   runbooks: runbookList.length,
 }, null, 2));

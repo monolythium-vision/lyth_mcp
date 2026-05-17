@@ -19,6 +19,7 @@
     "asset_registry.example.json",
     "bridge_routes.example.json",
     "clusters.example.json",
+    "nodes.example.json",
     "vendors.example.json"
   ],
   "scripts": {

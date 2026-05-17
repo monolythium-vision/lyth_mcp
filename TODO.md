@@ -368,6 +368,7 @@ Whitepaper refs: §14, §20, §23, §28, §30.5.
   - Local MCP planning shim implemented as `operator_search`, `operator_get`, and `operator_open_seats`; application drafts and live attestation remain TODO(core/indexer).
 - [ ] **CORE SDK INDEXER** Node registry / TPM attestation tools.
   - `node_attestation_get`, `node_pcr_explain`, `node_diversity_score`, `node_hosting_class`.
+  - Local MCP planning shim implemented as `node_registry_info`, `node_search`, `node_attestation_get`, `node_pcr_explain`, `node_diversity_score`, and `node_hosting_class`; live TPM quote verification remains TODO(core/indexer).
 - [ ] **CORE SDK** Delegation tools.
   - `stake_status`, `delegate_draft`, `rebalance_draft`, `undelegate_draft`, `autovote_simulate`.
   - Modes: Max Yield, Max Diversity, Max Decentralization, Custom.

@@ -149,6 +149,7 @@ examples/claude_desktop_config.json
 | `LYTH_MCP_ASSET_REGISTRY` | bundled `asset_registry.example.json` | Optional path override for local asset/risk metadata |
 | `LYTH_MCP_BRIDGE_ROUTE_REGISTRY` | bundled `bridge_routes.example.json` | Optional path override for local bridge/liquidity route metadata |
 | `LYTH_MCP_CLUSTER_REGISTRY` | bundled `clusters.example.json` | Optional path override for local cluster/operator/service-tier metadata |
+| `LYTH_MCP_NODE_REGISTRY` | bundled `nodes.example.json` | Optional path override for local node/TPM/PCR metadata |
 | `LYTH_MCP_ENABLE_SUBMIT` | `0` | Set to `1` to allow broadcasting already-signed payloads |
 | `LYTH_MCP_WALLET_STORE` | `~/.lyth_mcp/wallets.json` | Local encrypted wallet store path |
 | `LYTH_MCP_HOT_KEY` | `~/.lyth_mcp/hot.key` | Local key file used only for opt-in low-value mode |
@@ -236,6 +237,12 @@ LYTH_RPC_URLS="http://node1:8545,http://node2:8545" npm start
 | `operator_open_seats` | List clusters/operators with open operator seats |
 | `monarch_operator_assistant` | Explain cluster health, quorum, resource pressure, open seats, and service ROI |
 | `delegation_cap_explain` | Explain phase caps, diversification, over-cap grace, and tapered rewards |
+| `node_registry_info` | Show local node registry metadata and hashes |
+| `node_search` | Search nodes by cluster, operator, role, status, hosting, attestation, GPU, and TPM |
+| `node_attestation_get` | Get local TPM/attestation metadata and PCR comparison for one node |
+| `node_pcr_explain` | Explain one node's PCR values and measured-boot meaning |
+| `node_diversity_score` | Score node diversity by ASN, provider, country, hosting class, operator, and cluster |
+| `node_hosting_class` | Explain one node's hosting class and correlated-failure risk |
 | `rpc_service_search` | Search local RPC service tiers |
 | `archive_service_search` | Search local archive service tiers |
 | `prover_service_search` | Search local GPU prover service tiers |
@@ -412,9 +419,11 @@ Use `cluster_search`, `cluster_reputation`, `cluster_foundation_flag`, and `clus
 
 Use `monarch_operator_assistant` for node-operator planning: cluster health, 7-of-10 quorum, update status, open seats, resource pressure, and service ROI. It is intentionally node-ops only and should not be mixed into consumer wallet/payment flows.
 
+By default, node-level tools load `nodes.example.json`. Use `node_attestation_get`, `node_pcr_explain`, `node_diversity_score`, and `node_hosting_class` to explain TPM/PCR posture, measured-boot mismatches, ASN/provider/country diversity, and hosting risk. These tools only inspect local placeholder metadata; they do not verify TPM quote signatures.
+
 Use `prover_service_search`, `rpc_service_search`, `archive_service_search`, and `oracle_service_search` for service-tier routing. Use `gpu_proof_market_assistant` when an assistant needs to route a bridge, zkML, or generic proof request to a prover service with fee/latency assumptions. `ask_chain` routes questions such as "Show EU clusters with GPU prover service" and "Which clusters maximize decentralization for my stake?" into these typed tools and returns the local registry hash it used.
 
-Every cluster/operator response includes TODO(mainnet) assumptions. Production needs signed cluster metadata, live quorum/uptime/slashing feeds, TPM/PCR attestation, service-capacity feeds, and delegation cap checks from core/indexer.
+Every cluster/operator/node response includes TODO(mainnet) assumptions. Production needs signed cluster metadata, live quorum/uptime/slashing feeds, TPM/PCR attestation, service-capacity feeds, and delegation cap checks from core/indexer.
 
 ## Wallet Setup
 

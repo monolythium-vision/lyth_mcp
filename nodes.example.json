@@ -1,0 +1,222 @@
+{
+  "schemaVersion": 1,
+  "network": "testnet-69420",
+  "issuer": "monolythium-vision",
+  "updatedAt": "2026-05-17T00:00:00.000Z",
+  "disclaimer": "Example planning metadata for MCP node/TPM UX. TODO(mainnet): replace with signed node registry, TPM quote verification, and live PCR feeds.",
+  "nodes": [
+    {
+      "id": "eu1-validator-01",
+      "displayName": "EU1 Validator 01",
+      "clusterId": "mono-eu-1",
+      "operatorId": "foundation-labs",
+      "role": "validator",
+      "status": "active",
+      "region": "EU",
+      "jurisdiction": "DE",
+      "hosting": {
+        "class": "cloud_dedicated",
+        "provider": "hetzner",
+        "asn": 24940,
+        "country": "DE",
+        "datacenter": "fsn1"
+      },
+      "hardware": {
+        "cpuClass": "zen4",
+        "ramGb": 128,
+        "storageTb": 8,
+        "gpu": false,
+        "tpm": true,
+        "secureBoot": true
+      },
+      "attestation": {
+        "status": "draft",
+        "method": "tpm2_quote_placeholder",
+        "measuredAt": "2026-05-17T00:00:00.000Z",
+        "quoteHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "pcrs": {
+          "0": "sha256:aaaa",
+          "2": "sha256:bbbb",
+          "4": "sha256:cccc",
+          "7": "sha256:dddd",
+          "11": "sha256:eeee"
+        },
+        "expectedPcrs": {
+          "0": "sha256:aaaa",
+          "2": "sha256:bbbb",
+          "4": "sha256:cccc",
+          "7": "sha256:dddd",
+          "11": "sha256:eeee"
+        },
+        "notes": "TODO(mainnet): verify quote signature against registered AK and signed expected PCR profile."
+      }
+    },
+    {
+      "id": "nl1-prover-01",
+      "displayName": "NL1 Prover 01",
+      "clusterId": "mono-nl-community-1",
+      "operatorId": "atlas-provers",
+      "role": "prover",
+      "status": "active",
+      "region": "EU",
+      "jurisdiction": "NL",
+      "hosting": {
+        "class": "community_baremetal",
+        "provider": "self-hosted",
+        "asn": 51088,
+        "country": "NL",
+        "datacenter": "ams-community"
+      },
+      "hardware": {
+        "cpuClass": "epyc",
+        "ramGb": 256,
+        "storageTb": 12,
+        "gpu": true,
+        "gpuClass": "A100",
+        "tpm": true,
+        "secureBoot": true
+      },
+      "attestation": {
+        "status": "verified",
+        "method": "tpm2_quote_placeholder",
+        "measuredAt": "2026-05-17T00:00:00.000Z",
+        "quoteHash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "pcrs": {
+          "0": "sha256:aaaa",
+          "2": "sha256:bbbb",
+          "4": "sha256:cccc",
+          "7": "sha256:dddd",
+          "11": "sha256:ffff"
+        },
+        "expectedPcrs": {
+          "0": "sha256:aaaa",
+          "2": "sha256:bbbb",
+          "4": "sha256:cccc",
+          "7": "sha256:dddd",
+          "11": "sha256:ffff"
+        }
+      }
+    },
+    {
+      "id": "nl1-rpc-01",
+      "displayName": "NL1 RPC 01",
+      "clusterId": "mono-nl-community-1",
+      "operatorId": "tulip-infra",
+      "role": "rpc",
+      "status": "active",
+      "region": "EU",
+      "jurisdiction": "NL",
+      "hosting": {
+        "class": "community_baremetal",
+        "provider": "self-hosted",
+        "asn": 60781,
+        "country": "NL",
+        "datacenter": "rot-community"
+      },
+      "hardware": {
+        "cpuClass": "epyc",
+        "ramGb": 192,
+        "storageTb": 16,
+        "gpu": false,
+        "tpm": true,
+        "secureBoot": false
+      },
+      "attestation": {
+        "status": "draft",
+        "method": "manual_pending",
+        "measuredAt": "2026-05-17T00:00:00.000Z",
+        "pcrs": {
+          "0": "sha256:aaaa",
+          "2": "sha256:bbbb",
+          "4": "sha256:cccc",
+          "7": "sha256:0000",
+          "11": "sha256:ffff"
+        },
+        "expectedPcrs": {
+          "0": "sha256:aaaa",
+          "2": "sha256:bbbb",
+          "4": "sha256:cccc",
+          "7": "sha256:dddd",
+          "11": "sha256:ffff"
+        },
+        "notes": "Secure Boot PCR differs from expected profile; review before routing sensitive service traffic."
+      }
+    },
+    {
+      "id": "usw1-prover-01",
+      "displayName": "USW1 Prover 01",
+      "clusterId": "mono-us-west-1",
+      "operatorId": "pacific-stake",
+      "role": "prover",
+      "status": "active",
+      "region": "NA",
+      "jurisdiction": "US",
+      "hosting": {
+        "class": "cloud_gpu",
+        "provider": "lambda",
+        "asn": 398101,
+        "country": "US",
+        "datacenter": "us-west"
+      },
+      "hardware": {
+        "cpuClass": "zen4",
+        "ramGb": 384,
+        "storageTb": 20,
+        "gpu": true,
+        "gpuClass": "H100",
+        "tpm": true,
+        "secureBoot": true
+      },
+      "attestation": {
+        "status": "verified",
+        "method": "tpm2_quote_placeholder",
+        "measuredAt": "2026-05-17T00:00:00.000Z",
+        "quoteHash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "pcrs": {
+          "0": "sha256:aaaa",
+          "2": "sha256:bbbb",
+          "4": "sha256:cccc",
+          "7": "sha256:dddd",
+          "11": "sha256:9999"
+        },
+        "expectedPcrs": {
+          "0": "sha256:aaaa",
+          "2": "sha256:bbbb",
+          "4": "sha256:cccc",
+          "7": "sha256:dddd",
+          "11": "sha256:9999"
+        }
+      }
+    },
+    {
+      "id": "sg1-rpc-01",
+      "displayName": "SG1 RPC Draft 01",
+      "clusterId": "mono-sg-1",
+      "operatorId": "singapore-edge",
+      "role": "rpc",
+      "status": "draft",
+      "region": "APAC",
+      "jurisdiction": "SG",
+      "hosting": {
+        "class": "cloud_shared",
+        "provider": "aws",
+        "asn": 16509,
+        "country": "SG",
+        "datacenter": "ap-southeast-1"
+      },
+      "hardware": {
+        "cpuClass": "planned",
+        "ramGb": 64,
+        "storageTb": 4,
+        "gpu": false,
+        "tpm": false,
+        "secureBoot": false
+      },
+      "attestation": {
+        "status": "missing",
+        "method": "none",
+        "notes": "Draft node; do not route production traffic."
+      }
+    }
+  ]
+}
