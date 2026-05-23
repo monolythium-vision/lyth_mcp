@@ -54,7 +54,11 @@ export interface ChangenowEncryptedPayload {
 export interface ChangenowConfig {
   schemaVersion: 1;
   baseUrl: string;
+  /** Public API key — used to create swaps, run estimates, etc. */
   encryptedApiKey: ChangenowEncryptedPayload;
+  /** Private API key — required for /exchanges listing endpoint. Separate
+   *  from the public key in ChangeNow's partner program. */
+  encryptedPrivateApiKey?: ChangenowEncryptedPayload;
   /** Partner code drives revenue share. Optional — swap still works without it. */
   encryptedPartnerCode?: ChangenowEncryptedPayload;
   /** Refund-on-failure address. Defaults to the swap sender's address per ChangeNow rules. */
@@ -162,6 +166,8 @@ export async function writeChangenowConfig(
 
 export async function configureChangenow(args: {
   apiKey: string;
+  /** Private API key — only required for swap listing. Get from the partner dashboard. */
+  privateApiKey?: string;
   partnerCode?: string;
   defaultRefundAddress?: string;
 }): Promise<ChangenowConfig> {
@@ -175,6 +181,9 @@ export async function configureChangenow(args: {
     schemaVersion: STORE_VERSION,
     baseUrl: CHANGENOW_V2_BASE,
     encryptedApiKey: encryptSecret(args.apiKey, key),
+    encryptedPrivateApiKey: args.privateApiKey
+      ? encryptSecret(args.privateApiKey, key)
+      : existing?.encryptedPrivateApiKey,
     encryptedPartnerCode: args.partnerCode
       ? encryptSecret(args.partnerCode, key)
       : existing?.encryptedPartnerCode,
@@ -190,6 +199,7 @@ export async function configureChangenow(args: {
 async function requireConfig(): Promise<{
   config: ChangenowConfig;
   apiKey: string;
+  privateApiKey?: string;
   partnerCode?: string;
 }> {
   const config = await readChangenowConfig();
@@ -199,6 +209,9 @@ async function requireConfig(): Promise<{
   return {
     config,
     apiKey: decryptSecret(config.encryptedApiKey, localKey),
+    privateApiKey: config.encryptedPrivateApiKey
+      ? decryptSecret(config.encryptedPrivateApiKey, localKey)
+      : undefined,
     partnerCode: config.encryptedPartnerCode
       ? decryptSecret(config.encryptedPartnerCode, localKey)
       : undefined,
@@ -211,16 +224,25 @@ async function cnRequest<T = unknown>(
   options: {
     query?: Record<string, string | number | boolean | undefined>;
     body?: unknown;
+    /** Use the private API key (for /exchanges listing). Falls back to a clear
+     *  error if `usePrivateKey` is true but no private key is configured. */
+    usePrivateKey?: boolean;
   } = {},
 ): Promise<T> {
-  const { config, apiKey } = await requireConfig();
+  const { config, apiKey, privateApiKey } = await requireConfig();
+  const key = options.usePrivateKey ? privateApiKey : apiKey;
+  if (options.usePrivateKey && !privateApiKey) {
+    throw new Error(
+      "changenow private api key not configured — call changenow_configure with `privateApiKey` (separate from the public api key, available in the partner dashboard)",
+    );
+  }
   const url = new URL(config.baseUrl + path);
   if (options.query) {
     for (const [k, v] of Object.entries(options.query)) {
       if (v !== undefined) url.searchParams.set(k, String(v));
     }
   }
-  const headers: Record<string, string> = { "x-changenow-api-key": apiKey };
+  const headers: Record<string, string> = { "x-changenow-api-key": key! };
   if (options.body !== undefined) headers["content-type"] = "application/json";
   const body = options.body !== undefined ? JSON.stringify(options.body) : undefined;
   const res = await fetch(url.toString(), { method, headers, body });
@@ -453,8 +475,10 @@ export async function changenowSwapList(args: {
   dateTo?: string;
   status?: string;
 } = {}): Promise<{ data: ChangenowSwap[]; total?: number }> {
-  // ChangeNow v2 list endpoint returns an array; wrap it for parity with NowPayments.
-  const data = await cnRequest<ChangenowSwap[]>("GET", "/exchange/transactions", {
+  // ChangeNow v2 listing endpoint is `/exchanges` (GET) — requires the
+  // private API key, not the public swap-creation key. Returns an array.
+  const data = await cnRequest<ChangenowSwap[]>("GET", "/exchanges", {
+    usePrivateKey: true,
     query: {
       limit: args.limit ?? 25,
       offset: args.offset ?? 0,
@@ -525,6 +549,7 @@ export async function changenowFiatSellDraft(args: {
 export async function changenowRedactedConfig(): Promise<{
   baseUrl: string;
   apiKeyConfigured: boolean;
+  privateApiKeyConfigured: boolean;
   partnerConfigured: boolean;
   defaultRefundAddress?: string;
   configuredAt?: string;
@@ -535,6 +560,7 @@ export async function changenowRedactedConfig(): Promise<{
   return {
     baseUrl: config.baseUrl,
     apiKeyConfigured: true,
+    privateApiKeyConfigured: !!config.encryptedPrivateApiKey,
     partnerConfigured: !!config.encryptedPartnerCode,
     defaultRefundAddress: config.defaultRefundAddress,
     configuredAt: config.configuredAt,

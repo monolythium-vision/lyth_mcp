@@ -3770,17 +3770,19 @@ server.tool(
 
 server.tool(
   "changenow_configure",
-  "Configure ChangeNow API access. Stores the API key + optional partner code encrypted at ~/.lyth_mcp/changenow.json (AES-256-GCM + scrypt). Required before any other changenow_* tool.",
+  "Configure ChangeNow API access. Stores the public api key, optional private api key, and optional partner code encrypted at ~/.lyth_mcp/changenow.json (AES-256-GCM + scrypt). The private key is only required for swap_list (the /exchanges endpoint). Required before any other changenow_* tool.",
   {
-    apiKey: z.string().min(8).describe("ChangeNow API key from the partner dashboard."),
+    apiKey: z.string().min(8).describe("ChangeNow public api key (creates swaps, runs estimates)."),
+    privateApiKey: z.string().min(8).optional().describe("ChangeNow private api key (only required for swap_list). Separate from the public key in the partner dashboard."),
     partnerCode: z.string().min(1).optional().describe("Partner code for revenue share. Optional but recommended."),
     defaultRefundAddress: z.string().min(8).optional().describe("Refund address used when a swap fails."),
   },
-  async ({ apiKey, partnerCode, defaultRefundAddress }) => {
-    const config = await configureChangenow({ apiKey, partnerCode, defaultRefundAddress });
+  async ({ apiKey, privateApiKey, partnerCode, defaultRefundAddress }) => {
+    const config = await configureChangenow({ apiKey, privateApiKey, partnerCode, defaultRefundAddress });
     return text({
       configured: true,
       baseUrl: config.baseUrl,
+      privateApiKeyConfigured: !!config.encryptedPrivateApiKey,
       partnerConfigured: !!config.encryptedPartnerCode,
       defaultRefundAddress: config.defaultRefundAddress,
       warning:
